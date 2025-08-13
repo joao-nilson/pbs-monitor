@@ -1,0 +1,11 @@
+# /etc/systemd/system/pbs-monitor.timer
+[Unit]
+Description=Run PBS monitor hourly
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+#Unit=pbs-monitor.service
+
+[Install]
+WantedBy=timers.target

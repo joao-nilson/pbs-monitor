@@ -1,0 +1,15 @@
+# /etc/systemd/system/pbs-monitor.service
+[Unit]
+Description=PBS Monitoring Service
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/bin/pbs_monitor.py
+User=root
+Group=root
+WorkingDirectory=/tmp
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/opt/pbs/bin
+
+[Install]
+WantedBy=multi-user.target
