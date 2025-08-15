@@ -16,22 +16,23 @@ def parse_pbs_date(date_str):
     except ValueError:
         return None
 
-def get_job_stats(days=7, user=None, machine=None):
+def format_pbs_date(date_str):
+    """Format PBS date string to YYYY-MM-DD"""
+    dt = parse_pbs_date(date_str)
+    return dt.strftime("%Y-%m-%d") if dt else "N/A"
+
+def get_job_stats(days=None, user=None, machine=None, verbose=False):
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
     
-    # Calculate date range
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=days)
-    
     # Build WHERE clauses
     conditions = []
     params = []
-    
-    # Date filtering in Python (since dates are in text format)
-    # We'll filter dates after fetching due to format issues
-    
+   
+   # Date filtering in Python (since dates are in text format)
+   # We'll filter dates after fetching due to format issues
+   
     if user:
         conditions.append("user = ?")
         params.append(user)
@@ -41,9 +42,21 @@ def get_job_stats(days=7, user=None, machine=None):
     
     # Ensure we don't count NULL entries
     conditions.append("user IS NOT NULL AND machine IS NOT NULL")
-    
     where_clause = " AND ".join(conditions) if conditions else "1=1"
     
+    # Handle date range display
+    if days == 'all':
+        c.execute(f"SELECT MIN(start_time) FROM jobs WHERE {where_clause}", params)
+        min_date_str = c.fetchone()[0]
+        formatted_date = format_pbs_date(min_date_str) if min_date_str else "unknown date"
+        date_range = f"Complete history (since {formatted_date})"
+    else:
+        days = int(days) if days else 7
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=days)
+        date_range = f"Last {days} days (since {start_date.strftime('%Y-%m-%d')})"
+
+    # Main query
     query = f"""
         SELECT 
             user, 
@@ -56,60 +69,66 @@ def get_job_stats(days=7, user=None, machine=None):
         ORDER BY job_count DESC
     """
     
+    if verbose:
+        print(f"DEBUG: Executing query: {query}", file=sys.stderr)
+        print(f"DEBUG: With parameters: {params}", file=sys.stderr)
+    
     c.execute(query, params)
     results = []
     total_jobs = 0
     
     for row in c.fetchall():
         job_date = parse_pbs_date(row['start_time'])
-        if job_date and start_date <= job_date <= end_date:
+        if days == 'all' or (job_date and (datetime.now() - job_date <= timedelta(days=days))):
             total_jobs += row['job_count']
             results.append({
                 'user': row['user'],
                 'machine': row['machine'],
                 'jobs': row['job_count'],
-                'last_run': row['start_time']
+                'last_run': format_pbs_date(row['start_time'])
             })
     
     conn.close()
     return {
-        'period': f"Last {days} days (since {start_date.strftime('%Y-%m-%d')})",
+        'period': date_range,
         'total_jobs': total_jobs,
         'results': results
     }
 
 def main():
     parser = argparse.ArgumentParser(description='PBS Job Statistics')
-    parser.add_argument('--days', type=int, default=7, 
-                       help='Number of days to report (default: 7)')
-    parser.add_argument('--user', 
-                       help='Filter results by specific user')
-    parser.add_argument('--machine', 
-                       help='Filter results by specific compute node')
+    parser.add_argument('--days', nargs='?', const=7, default=7,
+                       help='Number of days to report (default: 7), use --days all for complete history')
+    parser.add_argument('--user', help='Filter by specific user')
+    parser.add_argument('--machine', help='Filter by specific compute node')
     parser.add_argument('--verbose', action='store_true',
                        help='Show additional debug information')
     args = parser.parse_args()
     
     if args.verbose:
-        print(f"DEBUG: Querying jobs for user={args.user}, machine={args.machine}", 
-              file=sys.stderr)
+        print(f"DEBUG: Starting with arguments: {vars(args)}", file=sys.stderr)
     
-    stats = get_job_stats(days=args.days, user=args.user, machine=args.machine)
+    stats = get_job_stats(
+        days=args.days,
+        user=args.user,
+        machine=args.machine,
+        verbose=args.verbose
+    )
     
     # Print report
     print(f"\nPBS Job Statistics - {stats['period']}")
     print(f"Total Jobs: {stats['total_jobs']}")
     
-    if args.verbose and not stats['results']:
-        print("DEBUG: No results found with current filters", file=sys.stderr)
+    if args.verbose:
+        print(f"DEBUG: Found {len(stats['results'])} matching jobs", file=sys.stderr)
     
     if stats['results']:
-        print("\n{:<20} {:<15} {:<10} {:<25}".format(
+        print("\n{:<20} {:<15} {:<10} {:<15}".format(
             "User", "Machine", "Jobs", "Last Run"))
-        print("-" * 70)
+        print("-" * 60)
         
         for row in stats['results']:
-            print("{:<20} {:<15} {:<10} {:<25}".format(
+            print("{:<20} {:<15} {:<10} {:<15}".format(
                 row['user'],
                 row['machine'],
                 row['jobs'],
