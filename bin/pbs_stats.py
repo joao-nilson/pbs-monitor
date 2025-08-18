@@ -284,18 +284,23 @@ def print_job_details(jobs, verbose=False):
     print("-" * 120)
     
     for job in jobs:
-        # Extract basic information
-        job_id = job['job_id'].split('.')[0]  # Show only the main job ID part
-        user = job['user']
-        machine = job['machine']
-        queue = job['queue']
-        job_name = job['job_name'][:15] + '...' if len(job['job_name']) > 15 else job['job_name']
-        state = job['state']
-        start_time = job['start_time'].split()[0]  # Show only date part
+        # Safely extract basic information
+        job_id = str(job.get('job_id', 'N/A')).split('.')[0]  # Show only the main job ID part
+        user = str(job.get('user', 'N/A'))
+        machine = str(job.get('machine', 'N/A'))
+        queue = str(job.get('queue', 'N/A'))
+        job_name = str(job.get('job_name', 'N/A'))
+        job_name = job_name[:15] + '...' if len(job_name) > 15 else job_name
+        state = str(job.get('state', 'N/A'))
+
+        start_time = 'N/A'
+        if job.get('start_time'):
+            start_time_parts = str(job['start_time']).split()
+            start_time = start_time_parts[0] if start_time_parts else 'N/A'
         
         # Extract resource usage
-        cpu_used = job['used']['cpus']
-        walltime = job['used']['walltime']
+        cpu_used = str(job.get('used', {}).get('cpus', 'N/A'))
+        walltime = str(job.get('used', {}).get('walltime', 'N/A'))
         
         # Print compact job line
         print("{:<12} {:<15} {:<20} {:<10} {:<15} {:<10} {:<12} {:<12} {:<12}".format(
@@ -312,12 +317,15 @@ def print_job_details(jobs, verbose=False):
         # Show additional details in verbose mode
         if verbose:
             print("\nAdditional Details:")
-            print(f"  Full Start Time: {job['start_time']}")
-            print(f"  Resources Requested: CPUs={job['resources']['cpus']}, Mem={job['resources']['mem']}, Walltime={job['resources']['walltime']}")
-            print(f"  Resources Used: CPUs={job['used']['cpus']}, Mem={job['used']['mem']}, Walltime={job['used']['walltime']}, CPU Time={job['used']['cpu_time']}")
-            print(f"  Exit Status: {job['exit_status']}")
-            if job['submit_args'] != 'N/A':
-                print(f"  Submit Arguments: {job['submit_args']}")
+            print(f"  Full Start Time: {job.get('start_time', 'N/A')}")
+            resources = job.get('resources', {})
+            print(f"  Resources Requested: CPUs={resources.get('cpus', 'N/A')}, Mem={resources.get('mem', 'N/A')}, Walltime={resources.get('walltime', 'N/A')}")
+            used = job.get('used', {})
+            print(f"  Resources Used: CPUs={used.get('cpus', 'N/A')}, Mem={used.get('mem', 'N/A')}, Walltime={used.get('walltime', 'N/A')}, CPU Time={used.get('cpu_time', 'N/A')}")
+            print(f"  Exit Status: {job.get('exit_status', 'N/A')}")
+            submit_args = job.get('submit_args', 'N/A')
+            if submit_args != 'N/A':
+                print(f"  Submit Arguments: {submit_args}")
             print("-" * 60)
 
 def main():
