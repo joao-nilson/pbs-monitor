@@ -278,29 +278,47 @@ def print_job_details(jobs, verbose=False):
         print("No jobs found matching the specified criteria.")
         return
 
+    # Print header
+    print("\n{:<12} {:<15} {:<20} {:<10} {:<15} {:<10} {:<12} {:<12} {:<12}".format(
+        "Job ID", "User", "Machine", "Queue", "Job Name", "State", "Start Time", "CPU Used", "Walltime"))
+    print("-" * 120)
+    
     for job in jobs:
-        print("\n" + "=" * 80)
-        print(f"Job ID: {job['job_id']}")
-        print(f"User: {job['user']}")
-        print(f"Machine: {job['machine']}")
-        print(f"Queue: {job['queue']}")
-        print(f"Job Name: {job['job_name']}")
-        print(f"State: {job['state']}")
-        print(f"Start Time: {job['start_time']}")
-        print("\nResource Request:")
-        print(f"  CPUs: {job['resources']['cpus']}")
-        print(f"  Memory: {job['resources']['mem']}")
-        print(f"  Walltime: {job['resources']['walltime']}")
-        print("\nResources Used:")
-        print(f"  CPUs: {job['used']['cpus']}")
-        print(f"  Memory: {job['used']['mem']}")
-        print(f"  Walltime: {job['used']['walltime']}")
-        print(f"  CPU Time: {job['used']['cpu_time']}")
-        print(f"\nExit Status: {job['exit_status']}")
-
+        # Extract basic information
+        job_id = job['job_id'].split('.')[0]  # Show only the main job ID part
+        user = job['user']
+        machine = job['machine']
+        queue = job['queue']
+        job_name = job['job_name'][:15] + '...' if len(job['job_name']) > 15 else job['job_name']
+        state = job['state']
+        start_time = job['start_time'].split()[0]  # Show only date part
+        
+        # Extract resource usage
+        cpu_used = job['used']['cpus']
+        walltime = job['used']['walltime']
+        
+        # Print compact job line
+        print("{:<12} {:<15} {:<20} {:<10} {:<15} {:<10} {:<12} {:<12} {:<12}".format(
+            job_id,
+            user,
+            machine,
+            queue,
+            job_name,
+            state,
+            start_time,
+            cpu_used,
+            walltime))
+        
+        # Show additional details in verbose mode
         if verbose:
-            print("\nSubmit Arguments:")
-            print(job['submit_args'])
+            print("\nAdditional Details:")
+            print(f"  Full Start Time: {job['start_time']}")
+            print(f"  Resources Requested: CPUs={job['resources']['cpus']}, Mem={job['resources']['mem']}, Walltime={job['resources']['walltime']}")
+            print(f"  Resources Used: CPUs={job['used']['cpus']}, Mem={job['used']['mem']}, Walltime={job['used']['walltime']}, CPU Time={job['used']['cpu_time']}")
+            print(f"  Exit Status: {job['exit_status']}")
+            if job['submit_args'] != 'N/A':
+                print(f"  Submit Arguments: {job['submit_args']}")
+            print("-" * 60)
 
 def main():
     parser = argparse.ArgumentParser(description='PBS Job Statistics')
@@ -324,6 +342,22 @@ def main():
             days=args.days,
             verbose=args.verbose
         )
+        # Print header for job listing
+        if args.user:
+            user_filter = f" for user '{args.user}'"
+        elif args.machine:
+            user_filter = f" on machine '{args.machine}'"
+        else:
+            user_filter = ""
+            
+        if args.days and args.days != 'all':
+            date_range = f" from last {args.days} days"
+        else:
+            date_range = ""
+            
+        print(f"\nPBS Job Details{user_filter}{date_range}")
+        print(f"Total Jobs: {len(jobs)}")
+        
         print_job_details(jobs, args.verbose)
     else:
         # Original summary functionality (unchanged)
