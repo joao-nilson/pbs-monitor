@@ -11,11 +11,11 @@ DB_PATH = '/var/lib/pbs_monitor/pbs_stats.db'
 def parse_pbs_date(date_str):
     """Convert PBS date format to datetime object"""
     if not date_str:
-        return None
+        return datetime.min
     try:
         return datetime.strptime(date_str, "%a %b %d %H:%M:%S %Y")
     except ValueError:
-        return None
+        return datetime.min
 
 def format_pbs_date(date_str):
     """Format PBS date string to DD-MM-YYYY HH:MM:SS"""
@@ -273,26 +273,66 @@ def get_job_details(user=None, machine=None, days=None, verbose=False):
     return results
 
 def print_job_details(jobs, verbose=False):
-    """Print detailed job information in a readable format"""
+    """Print detailed job information with proper deduplication"""
     if not jobs:
         print("No jobs found matching the specified criteria.")
         return
+
+    # Create a dictionary to store unique jobs based on job_id
+    unique_jobs = {}
+    for job in jobs:
+        job_id = job.get('job_id')
+        if not job_id:
+            continue
+#        if job_id not in unique_jobs:
+#            unique_jobs[job_id] = job
+#        else:
+#            current_start = parse_pbs_date(unique_jobs[job_id].get('start_time'))
+#            new_start = parse_pbs_date(job.get('start_time'))
+
+            # Only replace if new_start is valid and either:
+            # - current_start is None, or
+            # - new_start is later than current_start
+#            if new_start is not None and (current_start is None or new_start > current_start):
+#                unique_jobs[job_id] = job
+
+            
+        # If we haven't seen this job before or if this entry has more complete information
+        if job_id not in unique_jobs or (
+            job.get('start_time') and 
+            (not unique_jobs[job_id].get('start_time') or 
+             parse_pbs_date(job['start_time']) > parse_pbs_date(unique_jobs[job_id]['start_time']))
+        ):
+            unique_jobs[job_id] = job
+
+        
+
+    # Sort jobs by start time (newest first), with jobs without times at the end
+    sorted_jobs = sorted(
+        unique_jobs.values(),
+        key=lambda x: (
+            parse_pbs_date(x.get('start_time')) if x.get('start_time') 
+            else datetime.min
+        ),
+        reverse=True
+    )
 
     # Print header
     print("\n{:<12} {:<15} {:<20} {:<10} {:<15} {:<10} {:<12} {:<12} {:<12}".format(
         "Job ID", "User", "Machine", "Queue", "Job Name", "State", "Start Time", "CPU Used", "Walltime"))
     print("-" * 120)
     
-    for job in jobs:
-        # Safely extract basic information
-        job_id = str(job.get('job_id', 'N/A')).split('.')[0]  # Show only the main job ID part
+    for job in sorted_jobs:
+        # Safely extract and format all values
+        job_id = str(job.get('job_id', 'N/A')).split('.')[0]
         user = str(job.get('user', 'N/A'))
         machine = str(job.get('machine', 'N/A'))
         queue = str(job.get('queue', 'N/A'))
         job_name = str(job.get('job_name', 'N/A'))
         job_name = job_name[:15] + '...' if len(job_name) > 15 else job_name
         state = str(job.get('state', 'N/A'))
-
+        
+        # Handle start time
         start_time = 'N/A'
         if job.get('start_time'):
             start_time_parts = str(job['start_time']).split()
@@ -304,29 +344,24 @@ def print_job_details(jobs, verbose=False):
         
         # Print compact job line
         print("{:<12} {:<15} {:<20} {:<10} {:<15} {:<10} {:<12} {:<12} {:<12}".format(
-            job_id,
-            user,
-            machine,
-            queue,
-            job_name,
-            state,
-            start_time,
-            cpu_used,
-            walltime))
+            job_id, user, machine, queue, job_name, state, start_time, cpu_used, walltime))
         
         # Show additional details in verbose mode
         if verbose:
             print("\nAdditional Details:")
             print(f"  Full Start Time: {job.get('start_time', 'N/A')}")
             resources = job.get('resources', {})
-            print(f"  Resources Requested: CPUs={resources.get('cpus', 'N/A')}, Mem={resources.get('mem', 'N/A')}, Walltime={resources.get('walltime', 'N/A')}")
+            print(f"  Resources Requested: CPUs={resources.get('cpus', 'N/A')}, "
+                  f"Mem={resources.get('mem', 'N/A')}, Walltime={resources.get('walltime', 'N/A')}")
             used = job.get('used', {})
-            print(f"  Resources Used: CPUs={used.get('cpus', 'N/A')}, Mem={used.get('mem', 'N/A')}, Walltime={used.get('walltime', 'N/A')}, CPU Time={used.get('cpu_time', 'N/A')}")
+            print(f"  Resources Used: CPUs={used.get('cpus', 'N/A')}, "
+                  f"Mem={used.get('mem', 'N/A')}, Walltime={used.get('walltime', 'N/A')}, "
+                  f"CPU Time={used.get('cpu_time', 'N/A')}")
             print(f"  Exit Status: {job.get('exit_status', 'N/A')}")
-            submit_args = job.get('submit_args', 'N/A')
-            if submit_args != 'N/A':
-                print(f"  Submit Arguments: {submit_args}")
+            if job.get('submit_args', 'N/A') != 'N/A':
+                print(f"  Submit Arguments: {job.get('submit_args')}")
             print("-" * 60)
+
 
 def main():
     parser = argparse.ArgumentParser(description='PBS Job Statistics')
@@ -365,6 +400,7 @@ def main():
             
         print(f"\nPBS Job Details{user_filter}{date_range}")
         print(f"Total Jobs: {len(jobs)}")
+        print(f"Unique Jobs Displayed: {len(set(j['job_id'] for j in jobs if 'job_id' in j))}")
         
         print_job_details(jobs, args.verbose)
     else:
