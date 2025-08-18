@@ -11,11 +11,13 @@ DB_PATH = '/var/lib/pbs_monitor/pbs_stats.db'
 def parse_pbs_date(date_str):
     """Convert PBS date format to datetime object"""
     if not date_str:
-        return datetime.min
+        return None
+        #return datetime.min
     try:
         return datetime.strptime(date_str, "%a %b %d %H:%M:%S %Y")
     except ValueError:
-        return datetime.min
+        return None
+        #return datetime.min
 
 def format_pbs_date(date_str):
     """Format PBS date string to DD-MM-YYYY HH:MM:SS"""
@@ -207,17 +209,17 @@ def get_job_details(user=None, machine=None, days=None, verbose=False):
         conditions.append("machine = ?")
         params.append(machine)
 
-    # Date filtering
-    if days and days != 'all':
-        try:
-            days = int(days)
-            cutoff_date = datetime.now() - timedelta(days=days)
-            conditions.append("start_time >= ?")
-            params.append(cutoff_date.strftime("%d-%m-%Y"))
-        except ValueError:
-            pass
-
     where_clause = " AND ".join(conditions) if conditions else "1=1"
+
+    # Date filtering
+#    if days and days != 'all':
+#        try:
+#            days = int(days)
+#            cutoff_date = datetime.now() - timedelta(days=days)
+#            conditions.append("start_time >= ?")
+#            params.append(cutoff_date.strftime("%d-%m-%Y"))
+#        except ValueError:
+#            pass
 
     query = f"""
         SELECT
@@ -238,9 +240,28 @@ def get_job_details(user=None, machine=None, days=None, verbose=False):
     c.execute(query, params)
     results = []
 
+    # Calculate cutoff date if days is specified
+    cutoff_date = None
+    if days and days != 'all':
+        try:
+            days = int(days)
+            cutoff_date = datetime.now() - timedelta(days=days)
+        except ValueError:
+            pass
+
     for row in c.fetchall():
         job_data = json.loads(row['data_json'])
+        #resources_used = job_data.get('resources_used', {})
+        start_time_str = row['start_time']
+        start_time = parse_pbs_date(start_time_str)
+
+        # Skip jobs older than the cutoff date
+        if cutoff_date and (start_time is None or start_time < cutoff_date):
+            continue
+
+        # Initialize resources_used safely
         resources_used = job_data.get('resources_used', {})
+        resource_list = job_data.get('Resource_List', {})
 
         # Handle walltime conversion
         walltime_str = resources_used.get('walltime', 'N/A')
@@ -284,6 +305,20 @@ def print_job_details(jobs, verbose=False):
         job_id = job.get('job_id')
         if not job_id:
             continue
+
+        # Get the parsed dates for comparison
+        current_date = parse_pbs_date(unique_jobs.get(job_id, {}).get('start_time'))
+        new_date = parse_pbs_date(job.get('start_time'))
+
+        # Handle None values - we'll consider None as "very old" (datetime.min)
+        current_date = current_date if current_date is not None else datetime.min
+        new_date = new_date if new_date is not None else datetime.min
+
+        # If we haven't seen this job before or if this entry is newer
+        if job_id not in unique_jobs or new_date > current_date:
+            unique_jobs[job_id] = job
+
+
 #        if job_id not in unique_jobs:
 #            unique_jobs[job_id] = job
 #        else:
@@ -296,24 +331,24 @@ def print_job_details(jobs, verbose=False):
 #            if new_start is not None and (current_start is None or new_start > current_start):
 #                unique_jobs[job_id] = job
 
+
+
+
             
         # If we haven't seen this job before or if this entry has more complete information
-        if job_id not in unique_jobs or (
-            job.get('start_time') and 
-            (not unique_jobs[job_id].get('start_time') or 
-             parse_pbs_date(job['start_time']) > parse_pbs_date(unique_jobs[job_id]['start_time']))
-        ):
-            unique_jobs[job_id] = job
+#        if job_id not in unique_jobs or (
+#            job.get('start_time') and 
+#            (not unique_jobs[job_id].get('start_time') or 
+#             parse_pbs_date(job['start_time']) > parse_pbs_date(unique_jobs[job_id]['start_time']))
+#        ):
+#            unique_jobs[job_id] = job
 
         
 
     # Sort jobs by start time (newest first), with jobs without times at the end
     sorted_jobs = sorted(
         unique_jobs.values(),
-        key=lambda x: (
-            parse_pbs_date(x.get('start_time')) if x.get('start_time') 
-            else datetime.min
-        ),
+        key=lambda x: parse_pbs_date(x.get('start_time')) or datetime.min,
         reverse=True
     )
 
