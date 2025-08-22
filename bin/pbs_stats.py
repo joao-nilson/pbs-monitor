@@ -5,8 +5,11 @@ from datetime import datetime, timedelta
 import argparse
 import sys
 import json
+import subprocess
+import time
 
 DB_PATH = '/var/lib/pbs_monitor/pbs_stats.db'
+QSTAT_PATH = '/opt/pbs/bin/qstat'
 
 def parse_pbs_date(date_str):
     """Convert PBS date format to datetime object"""
@@ -23,6 +26,85 @@ def format_pbs_date(date_str):
     """Format PBS date string to DD-MM-YYYY HH:MM:SS"""
     dt = parse_pbs_date(date_str)
     return dt.strftime("%d-%m-%Y %H:%M:%S") if dt else "N/A"
+
+def get_real_time_jobs(user=None, machine=None, verbose=False):
+    """Get real-time job information using qstat command"""
+    try:
+        # Build qstat command
+        cmd = [QSTAT_PATH, '-fx', '-F', 'json']
+        if user:
+            cmd.extend(['-u', user])
+
+        # Execute qstat command
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+
+        if result.returncode != 0:
+            if verbose:
+                print(f"DEBUG: qstat command failed: {result.stderr}", file=sys.stderr)
+            return []
+
+        # Parse JSON output
+        data = json.loads(result.stdout)
+        jobs_data = data.get('Jobs', {})
+
+        real_time_jobs = []
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        for job_id, job_info in jobs_data.items():
+            # Filter by machine if specified
+            exec_host = job_info.get('exec_host')
+            if machine and exec_host:
+                if machine not in exec_host:
+                    continue
+
+            # Extract job details
+            job_user = job_info.get('Job_Owner', '').split('@')[0]
+            job_state = job_info.get('job_state', 'N/A')
+            job_queue = job_info.get('queue', 'N/A')
+            job_name = job_info.get('Job_Name', 'N/A')
+
+            # Get resources
+            resources_used = job_info.get('resources_used', {})
+            resources_requested = job_info.get('Resource_List', {})
+
+            real_time_jobs.append({
+                'job_id': job_id,
+                'user': job_user,
+                'machine': exec_host or 'N/A',
+                'queue': job_queue,
+                'job_name': job_name,
+                'state': job_state,
+                'start_time': current_time,  # Current time for real-time jobs
+                'resources': {
+                    'cpus': resources_requested.get('ncpus', 'N/A'),
+                    'mem': resources_requested.get('mem', 'N/A'),
+                    'walltime': resources_requested.get('walltime', 'N/A'),
+                },
+                'used': {
+                    'cpus': resources_used.get('ncpus', 'N/A'),
+                    'mem': resources_used.get('mem', 'N/A'),
+                    'walltime': resources_used.get('walltime', 'N/A'),
+                    'cpu_time': resources_used.get('cput', 'N/A'),
+                },
+                'exit_status': job_info.get('exit_status', 'N/A'),
+                'submit_args': job_info.get('Submit_arguments', 'N/A'),
+                'is_real_time': True
+            })
+
+        return real_time_jobs
+
+    except subprocess.TimeoutExpired:
+        if verbose:
+            print("DEBUG: qstat command timed out", file=sys.stderr)
+        return []
+    except json.JSONDecodeError:
+        if verbose:
+            print("DEBUG: Failed to parse qstat JSON output", file=sys.stderr)
+        return []
+    except Exception as e:
+        if verbose:
+            print(f"DEBUG: Error getting real-time jobs: {str(e)}", file=sys.stderr)
+        return []
 
 def parse_walltime(walltime_str):
     """Convert PBS walltime format (HH:MM:SS or D+HH:MM:SS) to seconds"""
@@ -76,8 +158,20 @@ def format_duration(seconds):
 
     return ' '.join(parts)
 
-def get_job_stats(days=None, user=None, machine=None, verbose=False):
+def get_job_stats(days=None, user=None, machine=None, real_time=None, verbose=False):
     """Get detailed job information with all available fields"""
+
+    if real_time:
+        # Get real-time jobs
+        real_time_jobs = get_real_time_jobs(user=user, machine=machine, verbose=verbose)
+        return {
+            'period': 'Real-time (current)',
+            'total_jobs': len(real_time_jobs),
+            'results': real_time_jobs,
+            'is_real_time': True
+        }
+
+    #get historical jobs from database
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
@@ -102,10 +196,11 @@ def get_job_stats(days=None, user=None, machine=None, verbose=False):
     
     # Handle date range display
     if days == 'all':
-        c.execute(f"SELECT MIN(start_time) FROM jobs WHERE {where_clause}", params)
+        c.execute(f"SELECT MIN(start_time) FROM jobs")
         min_date_str = c.fetchone()[0]
-        formatted_date = format_pbs_date(min_date_str) if min_date_str else "unknown date"
-        date_range = f"Complete history (since {formatted_date})"
+        min_date = parse_pbs_date(min_date_str)
+        #formatted_date = format_pbs_date(min_date_str) if min_date_str else "unknown date"
+        date_range = f"All history history (since {min_date_str})" if min_date_str else "All history"
     else:
         days = int(days) if days else 7
         end_date = datetime.now()
@@ -190,7 +285,8 @@ def get_job_stats(days=None, user=None, machine=None, verbose=False):
     return {
         'period': date_range,
         'total_jobs': total_jobs,
-        'results': results
+        'results': results,
+        'is_real_time' : False
     }
 
 def get_job_details(user=None, machine=None, days=None, verbose=False):
@@ -293,11 +389,20 @@ def get_job_details(user=None, machine=None, days=None, verbose=False):
     conn.close()
     return results
 
-def print_job_details(jobs, verbose=False):
-    """Print detailed job information with proper deduplication"""
+def print_job_details(jobs, verbose=False, is_real_time=False):
+    """Print detailed job information"""
     if not jobs:
         print("No jobs found matching the specified criteria.")
         return
+
+    if is_real_time:
+        print("\n{:<12} {:<15} {:<20} {:<10} {:<15} {:<10} {:<12} {:<12}".format(
+            "Job ID", "User", "Machine", "Queue", "Job Name", "State", "CPU Used", "Walltime"))
+        print("-" * 100)
+    else:
+        print("\n{:<20} {:<15} {:<10} {:<25}".format(
+            "User", "Machine", "Jobs", "Last Run"))
+        print("-" * 70)
 
     # Create a dictionary to store unique jobs based on job_id
     unique_jobs = {}
@@ -317,33 +422,8 @@ def print_job_details(jobs, verbose=False):
         # If we haven't seen this job before or if this entry is newer
         if job_id not in unique_jobs or new_date > current_date:
             unique_jobs[job_id] = job
+    
 
-
-#        if job_id not in unique_jobs:
-#            unique_jobs[job_id] = job
-#        else:
-#            current_start = parse_pbs_date(unique_jobs[job_id].get('start_time'))
-#            new_start = parse_pbs_date(job.get('start_time'))
-
-            # Only replace if new_start is valid and either:
-            # - current_start is None, or
-            # - new_start is later than current_start
-#            if new_start is not None and (current_start is None or new_start > current_start):
-#                unique_jobs[job_id] = job
-
-
-
-
-            
-        # If we haven't seen this job before or if this entry has more complete information
-#        if job_id not in unique_jobs or (
-#            job.get('start_time') and 
-#            (not unique_jobs[job_id].get('start_time') or 
-#             parse_pbs_date(job['start_time']) > parse_pbs_date(unique_jobs[job_id]['start_time']))
-#        ):
-#            unique_jobs[job_id] = job
-
-        
 
     # Sort jobs by start time (newest first), with jobs without times at the end
     sorted_jobs = sorted(
@@ -366,7 +446,9 @@ def print_job_details(jobs, verbose=False):
         job_name = str(job.get('job_name', 'N/A'))
         job_name = job_name[:15] + '...' if len(job_name) > 15 else job_name
         state = str(job.get('state', 'N/A'))
-        
+        cpu_used = str(job.get('used', {}).get('cpus', 'N/A'))
+        walltime = str(job.get('used', {}).get('walltime', 'N/A'))
+
         # Handle start time
         start_time = 'N/A'
         if job.get('start_time'):
@@ -404,14 +486,81 @@ def main():
                        help='Number of days to report (default: all), use --days 7 for last week')
     parser.add_argument('--user', help='Filter by specific user')
     parser.add_argument('--machine', help='Filter by specific compute node')
+    parser.add_argument('--real-time', '-r', action='store_true',
+                       help='Show real-time job information')
     parser.add_argument('--jobs', action='store_true',
                        help='Show detailed job information')
     parser.add_argument('--verbose', action='store_true',
                        help='Show additional debug information and details')
+    parser.add_argument('--watch', '-w', action='store_true',
+                       help='Watch mode - continuously update real-time information')
+    parser.add_argument('--interval', '-n', type=int, default=5,
+                       help='Update interval in seconds for watch mode (default: 5)')
     args = parser.parse_args()
 
     if args.verbose:
         print(f"DEBUG: Starting with arguments: {vars(args)}", file=sys.stderr)
+    
+    if args.watch and not args.real_time:
+        args.real_time = True
+    
+    if args.watch:
+        # Watch mode - continuously update
+        try:
+            while True:
+                # Clear screen (Unix/Linux)
+                print("\033c", end="")
+                
+                stats = get_job_stats(
+                    days=args.days, 
+                    user=args.user, 
+                    machine=args.machine, 
+                    real_time=args.real_time,
+                    verbose=args.verbose
+                )
+                
+                # Print header with timestamp
+                current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                print(f"PBS Job Statistics - {stats['period']} - {current_time}")
+                print(f"Total Jobs: {stats['total_jobs']}")
+                
+                if stats['results']:
+                    print_job_details(stats['results'], args.verbose, stats['is_real_time'])
+                else:
+                    print("\nNo jobs found matching the specified criteria.")
+                
+                print(f"\nRefreshing every {args.interval} seconds... (Ctrl+C to stop)")
+                time.sleep(args.interval)
+                
+        except KeyboardInterrupt:
+            print("\nMonitoring stopped.")
+            
+    else:
+        # Single execution mode
+        if args.verbose:
+            print(f"DEBUG: Querying jobs for user={args.user}, machine={args.machine}, "
+                  f"real_time={args.real_time}", file=sys.stderr)
+        
+        stats = get_job_stats(
+            days=args.days, 
+            user=args.user, 
+            machine=args.machine, 
+            real_time=args.real_time,
+            verbose=args.verbose
+        )
+        
+        # Print report
+        print(f"\nPBS Job Statistics - {stats['period']}")
+        print(f"Total Jobs: {stats['total_jobs']}")
+        
+        if args.verbose and not stats['results']:
+            print("DEBUG: No results found with current filters", file=sys.stderr)
+        
+        if stats['results']:
+            print_job_details(stats['results'], args.verbose, stats['is_real_time'])
+        else:
+            print("\nNo jobs found matching the specified criteria.")
+
 
     if args.jobs:
         jobs = get_job_details(
