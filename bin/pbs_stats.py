@@ -15,12 +15,10 @@ def parse_pbs_date(date_str):
     """Convert PBS date format to datetime object"""
     if not date_str:
         return None
-        #return datetime.min
     try:
         return datetime.strptime(date_str, "%a %b %d %H:%M:%S %Y")
     except ValueError:
         return None
-        #return datetime.min
 
 def format_pbs_date(date_str):
     """Format PBS date string to DD-MM-YYYY HH:MM:SS"""
@@ -48,7 +46,7 @@ def get_real_time_jobs(user=None, machine=None, verbose=False):
         jobs_data = data.get('Jobs', {})
 
         real_time_jobs = []
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        current_time = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
 
         for job_id, job_info in jobs_data.items():
             # Filter by machine if specified
@@ -172,222 +170,219 @@ def get_job_stats(days=None, user=None, machine=None, real_time=None, verbose=Fa
         }
 
     #get historical jobs from database
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    c = conn.cursor()
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
     
-    # Build WHERE clauses
-    conditions = []
-    params = []
+        # Build WHERE clauses
+        conditions = []
+        params = []
    
-   # Date filtering in Python (since dates are in text format)
-   # We'll filter dates after fetching due to format issues
+        # Date filtering in Python (since dates are in text format)
+        # We'll filter dates after fetching due to format issues
    
-    if user:
-        conditions.append("user = ?")
-        params.append(user)
-    if machine:
-        conditions.append("machine = ?")
-        params.append(machine)
+        if user:
+            conditions.append("user = ?")
+            params.append(user)
+        if machine:
+            conditions.append("machine = ?")
+            params.append(machine)
     
-    # Ensure we don't count NULL entries
-    conditions.append("user IS NOT NULL AND machine IS NOT NULL")
-    where_clause = " AND ".join(conditions) if conditions else "1=1"
+         # Ensure we don't count NULL entries
+        conditions.append("user IS NOT NULL AND machine IS NOT NULL")
     
-    # Handle date range display
-    if days == 'all':
-        c.execute(f"SELECT MIN(start_time) FROM jobs")
-        min_date_str = c.fetchone()[0]
-        min_date = parse_pbs_date(min_date_str)
-        #formatted_date = format_pbs_date(min_date_str) if min_date_str else "unknown date"
-        date_range = f"All history history (since {min_date_str})" if min_date_str else "All history"
-    else:
-        days = int(days) if days else 7
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=days)
-        date_range = f"Last {days} days (since {start_date.strftime('%Y-%m-%d')})"
+        # Add date filtering to SQL query for better performance
+        if days != 'all':
+            days = int(days) if days else 7
+            cutoff_date = (datetime.now() - timedelta(days=days)).strftime("%d-%m-%Y")
+            conditions.append("date(start_time) >= date(?)")
+            params.append(cutoff_date)
+        
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+        
+        # Handle date range display
+        if days == 'all':
+            c.execute(f"SELECT MIN(start_time) FROM jobs")
+            min_date_str = c.fetchone()[0]
+            min_date = parse_pbs_date(min_date_str)
+            #formatted_date = format_pbs_date(min_date_str) if min_date_str else "unknown date"
+            date_range = f"All history history (since {min_date_str})" if min_date_str else "All history"
+        else:
+            days = int(days) if days else 7
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=days)
+            date_range = f"Last {days} days (since {start_date.strftime('%d-%m-%Y')})"
 
-    # Main query
-    query = f"""
-        SELECT 
-            user, 
-            machine, 
-            start_time,
-            COUNT(*) as job_count
-        FROM jobs
-        WHERE {where_clause}
-        GROUP BY user, machine
-        ORDER BY job_count DESC
-    """
-    #query = f"""
-    #    SELECT
-    #        job_id,
-    #        user,
-    #        machine,
-    #        start_time,
-    #        data_json
-    #    FROM jobs
-    #    WHERE {where_clause}
-    #    ORDER BY start_time DESC
-    #"""
+        # Main query
+        query = f"""
+            SELECT 
+                user, 
+                machine, 
+                start_time,
+                COUNT(*) as job_count
+            FROM jobs
+            WHERE {where_clause}
+            GROUP BY user, machine
+            ORDER BY job_count DESC
+        """
     
-    if verbose:
-        print(f"DEBUG: Executing query: {query}", file=sys.stderr)
-        print(f"DEBUG: With parameters: {params}", file=sys.stderr)
+        if verbose:
+            print(f"DEBUG: Executing query: {query}", file=sys.stderr)
+            print(f"DEBUG: With parameters: {params}", file=sys.stderr)
     
-    c.execute(query, params)
-    results = []
-    total_jobs = 0
+        c.execute(query, params)
+        results = []
+        total_jobs = 0
     
-    for row in c.fetchall():
-        job_date = parse_pbs_date(row['start_time'])
-        if days == 'all' or (job_date and (datetime.now() - job_date <= timedelta(days=days))):
-            total_jobs += row['job_count']
-            results.append({
-                'user': row['user'],
-                'machine': row['machine'],
-                'jobs': row['job_count'],
-                'last_run': format_pbs_date(row['start_time'])
-            })
+        for row in c.fetchall():
+            job_date = parse_pbs_date(row['start_time'])
+            #skip if we cant parse the date
+            if job_date is None:
+                continue
+            if days == 'all' or (job_date and (datetime.now() - job_date <= timedelta(days=days))):
+                total_jobs += row['job_count']
+                results.append({
+                    'user': row['user'],
+                    'machine': row['machine'],
+                    'jobs': row['job_count'],
+                    'last_run': format_pbs_date(row['start_time'])
+                })
 
-#    for row in c.fetchall():
-#        job_data = json.loads(row['data_json'])
-#        resources_used = job_data.get('resources_used', {})
-
-        # Handle walltime conversion
-#        walltime_str = resources_used.get('walltime', 'N/A')
-#        walltime_seconds = parse_walltime(walltime_str) if walltime_str != 'N/A' else None
-
-#        results.append({
-#            'job_id': row['job_id'],
-#            'user': row['user'],
-#            'machine': row['machine'],
-#            'start_time': format_pbs_date(row['start_time']),
-#            'queue': job_data.get('queue', 'N/A'),
-#            'job_name': job_data.get('Job_Name', 'N/A'),
-#            'state': job_data.get('job_state', 'N/A'),
-#            'resources': {
-#                'cpus': job_data.get('Resource_List', {}).get('ncpus', 'N/A'),
-#                'mem': job_data.get('Resource_List', {}).get('mem', 'N/A'),
-#                'walltime': job_data.get('Resource_List', {}).get('walltime', 'N/A'),
-#            },
-#            'used': {
-#                'cpus': job_data.get('resources_used', {}).get('ncpus', 'N/A'),
-#                'mem': job_data.get('resources_used', {}).get('mem', 'N/A'),
-#                'walltime': format_duration(job_data.get('resources_used', {}).get('walltime')),
-#                'cpu_time': format_duration(job_data.get('resources_used', {}).get('cput')),
-#            },
-#            'exit_status': job_data.get('exit_status', 'N/A'),
-#            'submit_args': job_data.get('Submit_arguments', 'N/A'),
-#        })
-
-    conn.close()
-    return {
-        'period': date_range,
-        'total_jobs': total_jobs,
-        'results': results,
-        'is_real_time' : False
-    }
+        return {
+            'period': date_range,
+            'total_jobs': total_jobs,
+            'results': results,
+            'is_real_time' : False
+       }
+    except sqlite3.Error as e:
+        if verbose:
+            print(f"DEBUG: Database error in get_job_stats: {str(e)}", file=sys.stderr)
+        return {
+            'period': 'Error retrieving data',
+            'total_jobs': 0,
+            'results': [],
+            'is_real_time': False
+        }
+    
+    finally:
+        if 'conn' in locals():
+            conn.close()
 
 def get_job_details(user=None, machine=None, days=None, verbose=False):
     """Get detailed job information with all available fields"""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    c = conn.cursor()
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
 
-    conditions = []
-    params = []
+        conditions = []
+        params = []
 
-    if user:
-        conditions.append("user = ?")
-        params.append(user)
-    if machine:
-        conditions.append("machine = ?")
-        params.append(machine)
+        if user:
+            conditions.append("user = ?")
+            params.append(user)
+        if machine:
+            conditions.append("machine = ?")
+            params.append(machine)
 
-    where_clause = " AND ".join(conditions) if conditions else "1=1"
+        # Date filtering
+        if days and days != 'all':
+            try:
+                days = int(days)
+                cutoff_date = datetime.now() - timedelta(days=days)
+                conditions.append("start_time >= ?")
+                params.append(cutoff_date.strftime("%d-%m-%Y"))
+            except ValueError:
+                pass
+        
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
 
-    # Date filtering
-#    if days and days != 'all':
-#        try:
-#            days = int(days)
-#            cutoff_date = datetime.now() - timedelta(days=days)
-#            conditions.append("start_time >= ?")
-#            params.append(cutoff_date.strftime("%d-%m-%Y"))
-#        except ValueError:
-#            pass
+        query = f"""
+            SELECT
+                job_id,
+                user,
+                machine,
+                start_time,
+                data_json
+            FROM jobs
+            WHERE {where_clause}
+            ORDER BY start_time DESC
+        """
 
-    query = f"""
-        SELECT
-            job_id,
-            user,
-            machine,
-            start_time,
-            data_json
-        FROM jobs
-        WHERE {where_clause}
-        ORDER BY start_time DESC
-    """
+        if verbose:
+            print(f"DEBUG: Executing query: {query}", file=sys.stderr)
+            print(f"DEBUG: With parameters: {params}", file=sys.stderr)
 
-    if verbose:
-        print(f"DEBUG: Executing query: {query}", file=sys.stderr)
-        print(f"DEBUG: With parameters: {params}", file=sys.stderr)
+        c.execute(query, params)
+        results = []
 
-    c.execute(query, params)
-    results = []
+        # Calculate cutoff date if days is specified
+        cutoff_date = None
+        if days and days != 'all':
+            try:
+                days = int(days)
+                cutoff_date = datetime.now() - timedelta(days=days)
+            except ValueError:
+                pass
 
-    # Calculate cutoff date if days is specified
-    cutoff_date = None
-    if days and days != 'all':
-        try:
-            days = int(days)
-            cutoff_date = datetime.now() - timedelta(days=days)
-        except ValueError:
-            pass
+        for row in c.fetchall():
+            job_data = json.loads(row['data_json'])
+            #resources_used = job_data.get('resources_used', {})
+            start_time_str = row['start_time']
+            start_time = parse_pbs_date(start_time_str)
 
-    for row in c.fetchall():
-        job_data = json.loads(row['data_json'])
-        #resources_used = job_data.get('resources_used', {})
-        start_time_str = row['start_time']
-        start_time = parse_pbs_date(start_time_str)
+            # Skip jobs older than the cutoff date
+            if cutoff_date and (start_time is None or start_time < cutoff_date):
+                continue
 
-        # Skip jobs older than the cutoff date
-        if cutoff_date and (start_time is None or start_time < cutoff_date):
-            continue
+            # Initialize resources_used safely
+            resources_used = job_data.get('resources_used', {})
+            resource_list = job_data.get('Resource_List', {})
 
-        # Initialize resources_used safely
-        resources_used = job_data.get('resources_used', {})
-        resource_list = job_data.get('Resource_List', {})
+            # Handle walltime conversion
+            walltime_str = resources_used.get('walltime', 'N/A')
+            walltime_seconds = parse_walltime(walltime_str) if walltime_str != 'N/A' else None
 
-        # Handle walltime conversion
-        walltime_str = resources_used.get('walltime', 'N/A')
-        walltime_seconds = parse_walltime(walltime_str) if walltime_str != 'N/A' else None
+            results.append({
+                'job_id': row['job_id'],
+                'user': row['user'],
+                'machine': row['machine'],
+                'start_time': format_pbs_date(row['start_time']),
+                'queue': job_data.get('queue', 'N/A'),
+                'job_name': job_data.get('Job_Name', 'N/A'),
+                'state': job_data.get('job_state', 'N/A'),
+                'resources': {
+                    'cpus': job_data.get('Resource_List', {}).get('ncpus', 'N/A'),
+                    'mem': job_data.get('Resource_List', {}).get('mem', 'N/A'),
+                    'walltime': job_data.get('Resource_List', {}).get('walltime', 'N/A'),
+                },
+                'used': {
+                    'cpus': resources_used.get('ncpus', 'N/A'),
+                    'mem': resources_used.get('mem', 'N/A'),
+                    'walltime': format_duration(walltime_seconds),
+                    'cpu_time': format_duration(resources_used.get('cput')),
+                },
+                'exit_status': job_data.get('exit_status', 'N/A'),
+                'submit_args': job_data.get('Submit_arguments', 'N/A'),
+            })
 
-        results.append({
-            'job_id': row['job_id'],
-            'user': row['user'],
-            'machine': row['machine'],
-            'start_time': format_pbs_date(row['start_time']),
-            'queue': job_data.get('queue', 'N/A'),
-            'job_name': job_data.get('Job_Name', 'N/A'),
-            'state': job_data.get('job_state', 'N/A'),
-            'resources': {
-                'cpus': job_data.get('Resource_List', {}).get('ncpus', 'N/A'),
-                'mem': job_data.get('Resource_List', {}).get('mem', 'N/A'),
-                'walltime': job_data.get('Resource_List', {}).get('walltime', 'N/A'),
-            },
-            'used': {
-                'cpus': resources_used.get('ncpus', 'N/A'),
-                'mem': resources_used.get('mem', 'N/A'),
-                'walltime': format_duration(walltime_seconds),
-                'cpu_time': format_duration(resources_used.get('cput')),
-            },
-            'exit_status': job_data.get('exit_status', 'N/A'),
-            'submit_args': job_data.get('Submit_arguments', 'N/A'),
-        })
-
-    conn.close()
-    return results
+        return results
+    except sqlite3.Error as e:
+        if verbose:
+            print(f"DEBUG: Database error in get_job_details: {str(e)}", file=sys.stderr)
+        return []
+    except json.JSONDecodeError as e:
+        if verbose:
+            print(f"DEBUG: JSON decode error in get_job_details: {str(e)}", file=sys.stderr)
+        return []
+    except Exception as e:
+        if verbose:
+            print(f"DEBUG: Unexpected error in get_job_details: {str(e)}", file=sys.stderr)
+        return []
+    finally:
+        if 'conn' in locals():
+            conn.close()
 
 def print_job_details(jobs, verbose=False, is_real_time=False):
     """Print detailed job information"""
@@ -396,13 +391,16 @@ def print_job_details(jobs, verbose=False, is_real_time=False):
         return
 
     if is_real_time:
-        print("\n{:<12} {:<15} {:<20} {:<10} {:<15} {:<10} {:<12} {:<12} {:<12}".format(
-        "Job ID", "User", "Machine", "Queue", "Job Name", "State", "Start Time", "CPU Used", "Walltime"))
-        print("-" * 120)
+        header_format = "{:<12} {:<15} {:<20} {:<10} {:<15} {:<10} {:<12} {:<12} {:<12}"
+        headers = ("Job ID", "User", "Machine", "Queue", "Job Name", "State", "Start Time", "CPU Used", "Walltime")
+        separator = "-" * 120
     else:
-        print("\n{:<20} {:<15} {:<10} {:<25}".format(
-            "User", "Machine", "Jobs", "Last Run"))
-        print("-" * 70)
+        header_format = "{:<20} {:<15} {:<10} {:<25}"
+        headers = ("User", "Machine", "Jobs", "Last Run")
+        separator = "-" * 70
+
+    print(f"\n{header_format.format(*headers)}")
+    print(separator)
 
     # Create a dictionary to store unique jobs based on job_id
     unique_jobs = {}
@@ -547,7 +545,7 @@ def main():
                     )
                     
                     # Print header with timestamp
-                    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    current_time = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
                     print(f"PBS Job Statistics - {stats['period']} - {current_time}")
                     print(f"Total Jobs: {stats['total_jobs']}")
                     
