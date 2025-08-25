@@ -396,9 +396,9 @@ def print_job_details(jobs, verbose=False, is_real_time=False):
         return
 
     if is_real_time:
-        print("\n{:<12} {:<15} {:<20} {:<10} {:<15} {:<10} {:<12} {:<12}".format(
-            "Job ID", "User", "Machine", "Queue", "Job Name", "State", "CPU Used", "Walltime"))
-        print("-" * 100)
+        print("\n{:<12} {:<15} {:<20} {:<10} {:<15} {:<10} {:<12} {:<12} {:<12}".format(
+        "Job ID", "User", "Machine", "Queue", "Job Name", "State", "Start Time", "CPU Used", "Walltime"))
+        print("-" * 120)
     else:
         print("\n{:<20} {:<15} {:<10} {:<25}".format(
             "User", "Machine", "Jobs", "Last Run"))
@@ -433,9 +433,9 @@ def print_job_details(jobs, verbose=False, is_real_time=False):
     )
 
     # Print header
-    print("\n{:<12} {:<15} {:<20} {:<10} {:<15} {:<10} {:<12} {:<12} {:<12}".format(
-        "Job ID", "User", "Machine", "Queue", "Job Name", "State", "Start Time", "CPU Used", "Walltime"))
-    print("-" * 120)
+    #print("\n{:<12} {:<15} {:<20} {:<10} {:<15} {:<10} {:<12} {:<12} {:<12}".format(
+    #    "Job ID", "User", "Machine", "Queue", "Job Name", "State", "Start Time", "CPU Used", "Walltime"))
+    #print("-" * 120)
     
     for job in sorted_jobs:
         # Safely extract and format all values
@@ -503,64 +503,6 @@ def main():
     
     if args.watch and not args.real_time:
         args.real_time = True
-    
-    if args.watch:
-        # Watch mode - continuously update
-        try:
-            while True:
-                # Clear screen (Unix/Linux)
-                print("\033c", end="")
-                
-                stats = get_job_stats(
-                    days=args.days, 
-                    user=args.user, 
-                    machine=args.machine, 
-                    real_time=args.real_time,
-                    verbose=args.verbose
-                )
-                
-                # Print header with timestamp
-                current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                print(f"PBS Job Statistics - {stats['period']} - {current_time}")
-                print(f"Total Jobs: {stats['total_jobs']}")
-                
-                if stats['results']:
-                    print_job_details(stats['results'], args.verbose, stats['is_real_time'])
-                else:
-                    print("\nNo jobs found matching the specified criteria.")
-                
-                print(f"\nRefreshing every {args.interval} seconds... (Ctrl+C to stop)")
-                time.sleep(args.interval)
-                
-        except KeyboardInterrupt:
-            print("\nMonitoring stopped.")
-            
-    else:
-        # Single execution mode
-        if args.verbose:
-            print(f"DEBUG: Querying jobs for user={args.user}, machine={args.machine}, "
-                  f"real_time={args.real_time}", file=sys.stderr)
-        
-        stats = get_job_stats(
-            days=args.days, 
-            user=args.user, 
-            machine=args.machine, 
-            real_time=args.real_time,
-            verbose=args.verbose
-        )
-        
-        # Print report
-        print(f"\nPBS Job Statistics - {stats['period']}")
-        print(f"Total Jobs: {stats['total_jobs']}")
-        
-        if args.verbose and not stats['results']:
-            print("DEBUG: No results found with current filters", file=sys.stderr)
-        
-        if stats['results']:
-            print_job_details(stats['results'], args.verbose, stats['is_real_time'])
-        else:
-            print("\nNo jobs found matching the specified criteria.")
-
 
     if args.jobs:
         jobs = get_job_details(
@@ -588,34 +530,62 @@ def main():
         
         print_job_details(jobs, args.verbose)
     else:
-        # Original summary functionality (unchanged)
-        stats = get_job_stats(
-            days=args.days if args.days else 'all',
-            user=args.user,
-            machine=args.machine,
-            verbose=args.verbose
-        )
-
-        # Print report
-        print(f"\nPBS Job Statistics - {stats['period']}")
-        print(f"Total Jobs: {stats['total_jobs']}")
-
-        if args.verbose:
-            print(f"DEBUG: Found {len(stats['results'])} matching jobs", file=sys.stderr)
-
-        if stats['results']:
-            print("\n{:<20} {:<15} {:<10} {:<15}".format(
-                "User", "Machine", "Jobs", "Last Run"))
-            print("-" * 60)
-
-            for row in stats['results']:
-                print("{:<20} {:<15} {:<10} {:<15}".format(
-                    row['user'],
-                    row['machine'],
-                    row['jobs'],
-                    row['last_run']))
+        # Handle summary statistics (with watch mode support)
+        if args.watch:
+            # Watch mode - continuously update
+            try:
+                while True:
+                    # Clear screen (Unix/Linux)
+                    print("\033c", end="")
+                    
+                    stats = get_job_stats(
+                        days=args.days, 
+                        user=args.user, 
+                        machine=args.machine, 
+                        real_time=args.real_time,
+                        verbose=args.verbose
+                    )
+                    
+                    # Print header with timestamp
+                    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    print(f"PBS Job Statistics - {stats['period']} - {current_time}")
+                    print(f"Total Jobs: {stats['total_jobs']}")
+                    
+                    if stats['results']:
+                        print_job_details(stats['results'], args.verbose, stats['is_real_time'])
+                    else:
+                        print("\nNo jobs found matching the specified criteria.")
+                    
+                    print(f"\nRefreshing every {args.interval} seconds... (Ctrl+C to stop)")
+                    time.sleep(args.interval)
+                    
+            except KeyboardInterrupt:
+                print("\nMonitoring stopped.")
         else:
-            print("\nNo jobs found matching the specified criteria.")
+            # Single execution mode
+            if args.verbose:
+                print(f"DEBUG: Querying jobs for user={args.user}, machine={args.machine}, "
+                      f"real_time={args.real_time}", file=sys.stderr)
+            
+            stats = get_job_stats(
+                days=args.days, 
+                user=args.user, 
+                machine=args.machine, 
+                real_time=args.real_time,
+                verbose=args.verbose
+            )
+            
+            # Print report
+            print(f"\nPBS Job Statistics - {stats['period']}")
+            print(f"Total Jobs: {stats['total_jobs']}")
+            
+            if args.verbose and not stats['results']:
+                print("DEBUG: No results found with current filters", file=sys.stderr)
+            
+            if stats['results']:
+                print_job_details(stats['results'], args.verbose, stats['is_real_time'])
+            else:
+                print("\nNo jobs found matching the specified criteria.")
 
 if __name__ == "__main__":
     main()
