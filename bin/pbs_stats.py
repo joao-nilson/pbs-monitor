@@ -235,17 +235,20 @@ def get_job_stats(days=None, user=None, machine=None, real_time=None, verbose=Fa
         total_jobs = 0
     
         for row in c.fetchall():
-            job_date = parse_pbs_date(row['start_time'])
+            start_time_str = row['start_time']
+            job_date = parse_pbs_date(start_time_str)
+            
             #skip if we cant parse the date
             if job_date is None:
                 continue
+            
             if days == 'all' or (job_date and (datetime.now() - job_date <= timedelta(days=days))):
                 total_jobs += row['job_count']
                 results.append({
                     'user': row['user'],
                     'machine': row['machine'],
                     'jobs': row['job_count'],
-                    'last_run': format_pbs_date(row['start_time'])
+                    'last_run': format_pbs_date(start_time_str)
                 })
 
         return {
