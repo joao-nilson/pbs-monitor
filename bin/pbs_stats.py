@@ -192,13 +192,11 @@ def get_job_stats(days=None, user=None, machine=None, real_time=None, verbose=Fa
         conditions.append("user IS NOT NULL AND machine IS NOT NULL")
     
         # Add date filtering to SQL query for better performance
-        if days != 'all':
-            days = int(days) if days else 7
-            cutoff_date = (datetime.now() - timedelta(days=days)).strftime("%d-%m-%Y")
-            conditions.append("date(start_time) >= date(?)")
-            params.append(cutoff_date)
-        
-        where_clause = " AND ".join(conditions) if conditions else "1=1"
+#        if days != 'all':
+#            days = int(days) if days else 7
+#            cutoff_date = (datetime.now() - timedelta(days=days)).strftime("%d-%m-%Y")
+#            conditions.append("date(start_time) >= date(?)")
+#            params.append(cutoff_date)
         
         # Handle date range display
         if days == 'all':
@@ -212,6 +210,8 @@ def get_job_stats(days=None, user=None, machine=None, real_time=None, verbose=Fa
             end_date = datetime.now()
             start_date = end_date - timedelta(days=days)
             date_range = f"Last {days} days (since {start_date.strftime('%d-%m-%Y')})"
+
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
 
         # Main query
         query = f"""
@@ -233,23 +233,41 @@ def get_job_stats(days=None, user=None, machine=None, real_time=None, verbose=Fa
         c.execute(query, params)
         results = []
         total_jobs = 0
-    
+ 
+        # Calculate cutoff date for Python-side filtering in %d-%m-%Y format
+        cutoff_date = None
+        if days != 'all':
+            days = int(days) if days else 7
+            cutoff_date = datetime.now() - timedelta(days=days)
+#            cutoff_date_str = (datetime.now() - timedelta(days=days)).strftime("%d-%m-%Y")
+            if verbose:
+                print(f"DEBUG: Filtering jobs since {cutoff_date_str}", file=sys.stderr)
+
         for row in c.fetchall():
-            start_time_str = row['start_time']
-            job_date = parse_pbs_date(start_time_str)
+            job_date = parse_pbs_date(row['start_time'])
             
             #skip if we cant parse the date
             if job_date is None:
+                if verbose:
+                    print(f"DEBUG: Could not parse date: {row['start_time']}", file=sys.stderr)
                 continue
+
+            # Convert job date to %d-%m-%Y format for comparison
+            #job_date_str = job_date.strftime("%d-%m-%Y")
             
-            if days == 'all' or (job_date and (datetime.now() - job_date <= timedelta(days=days))):
+            if days == 'all' or (cutoff_date and job_date >= cutoff_date):
+            #if days == 'all' or (cutoff_date and job_date >= cutoff_date):
                 total_jobs += row['job_count']
                 results.append({
                     'user': row['user'],
                     'machine': row['machine'],
                     'jobs': row['job_count'],
-                    'last_run': format_pbs_date(start_time_str)
+                    'last_run': format_pbs_date(row['start_time'])
                 })
+            if verbose:
+                    print(f"DEBUG: Including job from {job_date} (cutoff: {cutoff_date_str})", file=sys.stderr)
+            elif verbose:
+                print(f"DEBUG: Excluding job from {job_date} (cutoff: {cutoff_date_str})", file=sys.stderr)
 
         return {
             'period': date_range,
@@ -289,14 +307,14 @@ def get_job_details(user=None, machine=None, days=None, verbose=False):
             params.append(machine)
 
         # Date filtering
-        if days and days != 'all':
-            try:
-                days = int(days)
-                cutoff_date = datetime.now() - timedelta(days=days)
-                conditions.append("start_time >= ?")
-                params.append(cutoff_date.strftime("%d-%m-%Y"))
-            except ValueError:
-                pass
+#        if days and days != 'all':
+#            try:
+#                days = int(days)
+#                cutoff_date = datetime.now() - timedelta(days=days)
+#                conditions.append("start_time >= ?")
+#                params.append(cutoff_date.strftime("%d-%m-%Y"))
+#            except ValueError:
+#                pass
         
         where_clause = " AND ".join(conditions) if conditions else "1=1"
 
@@ -325,6 +343,8 @@ def get_job_details(user=None, machine=None, days=None, verbose=False):
             try:
                 days = int(days)
                 cutoff_date = datetime.now() - timedelta(days=days)
+                if verbose:
+                    print(f"DEBUG: Filtering jobs since {cutoff_date}", file=sys.stderr)
             except ValueError:
                 pass
 
@@ -334,8 +354,16 @@ def get_job_details(user=None, machine=None, days=None, verbose=False):
             start_time_str = row['start_time']
             start_time = parse_pbs_date(start_time_str)
 
+            # Skip if we can't parse the date
+            if start_time is None:
+                if verbose:
+                    print(f"DEBUG: Could not parse date: {start_time_str}", file=sys.stderr)
+                continue
+
             # Skip jobs older than the cutoff date
-            if cutoff_date and (start_time is None or start_time < cutoff_date):
+            if cutoff_date and start_time < cutoff_date:
+                if verbose:
+                    print(f"DEBUG: Excluding job from {start_time} (cutoff: {cutoff_date})", file=sys.stderr)
                 continue
 
             # Initialize resources_used safely
@@ -368,8 +396,11 @@ def get_job_details(user=None, machine=None, days=None, verbose=False):
                 'exit_status': job_data.get('exit_status', 'N/A'),
                 'submit_args': job_data.get('Submit_arguments', 'N/A'),
             })
+            if verbose:
+                print(f"DEBUG: Including job from {start_time}", file=sys.stderr)
 
         return results
+
     except sqlite3.Error as e:
         if verbose:
             print(f"DEBUG: Database error in get_job_details: {str(e)}", file=sys.stderr)
