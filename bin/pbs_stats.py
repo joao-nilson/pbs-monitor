@@ -108,26 +108,25 @@ def parse_walltime(walltime_str):
     """Convert PBS walltime format (HH:MM:SS or D+HH:MM:SS) to seconds"""
     if not walltime_str or walltime_str == 'N/A':
         return None
-
-    # Handle HH:MM:SS format
-    if ':' in walltime_str:
-        parts = walltime_str.split(':')
-        if len(parts) == 3:  # HH:MM:SS
-            hours, minutes, seconds = map(int, parts)
-            return hours * 3600 + minutes * 60 + seconds
-        elif len(parts) == 2:  # MM:SS
-            minutes, seconds = map(int, parts)
-            return minutes * 60 + seconds
-    
-    # Handle days+time format (D+HH:MM:SS)
-    if '+' in walltime_str:
-        days_part, time_part = walltime_str.split('+')
-        days = int(days_part)
-        time_seconds = parse_walltime(time_part)
-        return days * 86400 + time_seconds if time_seconds else None
-    
-    # Try to convert directly to integer (seconds)
     try:
+        # Handle HH:MM:SS format
+        if ':' in walltime_str:
+            parts = walltime_str.split(':')
+            if len(parts) == 3:  # HH:MM:SS
+                hours, minutes, seconds = map(int, parts)
+                return hours * 3600 + minutes * 60 + seconds
+            elif len(parts) == 2:  # MM:SS
+                minutes, seconds = map(int, parts)
+                return minutes * 60 + seconds
+    
+        # Handle days+time format (D+HH:MM:SS)
+        if '+' in walltime_str:
+            days_part, time_part = walltime_str.split('+')
+            days = int(days_part)
+            time_seconds = parse_walltime(time_part)
+            return days * 86400 + time_seconds if time_seconds else None
+    
+        # Try to convert directly to integer (seconds)
         return int(walltime_str)
     except ValueError:
         return None
@@ -454,8 +453,8 @@ def print_job_details(jobs, verbose=False, is_real_time=False):
             start_time = start_time_parts[0] if start_time_parts else 'N/A'
         
         # Extract resource usage
-        cpu_used = str(job.get('used', {}).get('cpus', 'N/A'))
-        walltime = str(job.get('used', {}).get('walltime', 'N/A'))
+#        cpu_used = str(job.get('used', {}).get('cpus', 'N/A'))
+#        walltime = str(job.get('used', {}).get('walltime', 'N/A'))
         
         # Print compact job line
         print("{:<12} {:<15} {:<20} {:<10} {:<15} {:<10} {:<12} {:<12} {:<12}".format(
