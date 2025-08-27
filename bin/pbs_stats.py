@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 # /usr/local/bin/pbs_stats.py
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import argparse
 import sys
 import json
@@ -10,6 +10,27 @@ import time
 
 DB_PATH = '/var/lib/pbs_monitor/pbs_stats.db'
 QSTAT_PATH = '/opt/pbs/bin/qstat'
+
+def parse_db_date(date_str):
+    """Try multiple date formats to parse dates from database"""
+    if not date_str:
+        return None
+    
+    formats = [
+        "%a %b %d %H:%M:%S %Y",  # PBS format
+        "%Y-%m-%d %H:%M:%S",     # ISO format
+        "%d-%m-%Y %H:%M:%S",     # European format
+    ]
+    
+    for fmt in formats:
+        try:
+            return datetime.strptime(date_str, fmt)
+        except ValueError:
+            continue
+    
+    if verbose:
+        print(f"DEBUG: Could not parse date: {date_str}", file=sys.stderr)
+    return None
 
 def parse_pbs_date(date_str):
     """Convert PBS date format to datetime object"""
@@ -22,7 +43,8 @@ def parse_pbs_date(date_str):
 
 def format_pbs_date(date_str):
     """Format PBS date string to DD-MM-YYYY HH:MM:SS"""
-    dt = parse_pbs_date(date_str)
+    #dt = parse_pbs_date(date_str)
+    dt = parse_db_date(date_str)
     return dt.strftime("%d-%m-%Y %H:%M:%S") if dt else "N/A"
 
 def get_real_time_jobs(user=None, machine=None, verbose=False):
@@ -192,17 +214,19 @@ def get_job_stats(days=None, user=None, machine=None, real_time=None, verbose=Fa
         conditions.append("user IS NOT NULL AND machine IS NOT NULL")
     
         # Add date filtering to SQL query for better performance
-#        if days != 'all':
-#            days = int(days) if days else 7
-#            cutoff_date = (datetime.now() - timedelta(days=days)).strftime("%d-%m-%Y")
-#            conditions.append("date(start_time) >= date(?)")
-#            params.append(cutoff_date)
+        if days != 'all':
+            days = int(days) if days else 7
+            cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
+            #cutoff_date = (datetime.now() - timedelta(days=days)).strftime("%d-%m-%Y")
+            conditions.append("date(start_time) >= date(?)")
+            params.append(cutoff_date)
         
         # Handle date range display
         if days == 'all':
             c.execute(f"SELECT MIN(start_time) FROM jobs")
             min_date_str = c.fetchone()[0]
-            min_date = parse_pbs_date(min_date_str)
+            min_date = parse_db_date(min_date_str)
+            #min_date = parse_pbs_date(min_date_str)
             #formatted_date = format_pbs_date(min_date_str) if min_date_str else "unknown date"
             date_range = f"All history history (since {min_date_str})" if min_date_str else "All history"
         else:
@@ -238,13 +262,17 @@ def get_job_stats(days=None, user=None, machine=None, real_time=None, verbose=Fa
         cutoff_date = None
         if days != 'all':
             days = int(days) if days else 7
-            cutoff_date = datetime.now() - timedelta(days=days)
+            cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
+#            cutoff_date = datetime.now() - timedelta(days=days)
 #            cutoff_date_str = (datetime.now() - timedelta(days=days)).strftime("%d-%m-%Y")
             if verbose:
-                print(f"DEBUG: Filtering jobs since {cutoff_date_str}", file=sys.stderr)
+                print(f"DEBUG: Filtering jobs since {cutoff_date}", file=sys.stderr)
 
         for row in c.fetchall():
-            job_date = parse_pbs_date(row['start_time'])
+            if verbose:
+                print(f"DEBUG: Raw date from DB: {row['start_time']}", file=sys.stderr)
+            job_date = parse_db_date(row['start_time'])
+#            job_date = parse_pbs_date(row['start_time'])
             
             #skip if we cant parse the date
             if job_date is None:
@@ -342,7 +370,8 @@ def get_job_details(user=None, machine=None, days=None, verbose=False):
         if days and days != 'all':
             try:
                 days = int(days)
-                cutoff_date = datetime.now() - timedelta(days=days)
+                cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
+#                cutoff_date = datetime.now() - timedelta(days=days)
                 if verbose:
                     print(f"DEBUG: Filtering jobs since {cutoff_date}", file=sys.stderr)
             except ValueError:
@@ -352,7 +381,8 @@ def get_job_details(user=None, machine=None, days=None, verbose=False):
             job_data = json.loads(row['data_json'])
             #resources_used = job_data.get('resources_used', {})
             start_time_str = row['start_time']
-            start_time = parse_pbs_date(start_time_str)
+            start_time = parse_db_date(start_time_str)
+#            start_time = parse_pbs_date(start_time_str)
 
             # Skip if we can't parse the date
             if start_time is None:
@@ -443,8 +473,11 @@ def print_job_details(jobs, verbose=False, is_real_time=False):
             continue
 
         # Get the parsed dates for comparison
-        current_date = parse_pbs_date(unique_jobs.get(job_id, {}).get('start_time'))
-        new_date = parse_pbs_date(job.get('start_time'))
+#        current_date = parse_pbs_date(unique_jobs.get(job_id, {}).get('start_time'))
+#        new_date = parse_pbs_date(job.get('start_time'))
+        current_date = parse_db_date(unique_jobs.get(job_id, {}).get('start_time'))
+        new_date = parse_db_date(job.get('start_time'))
+
 
         # Handle None values - we'll consider None as "very old" (datetime.min)
         current_date = current_date if current_date is not None else datetime.min
@@ -459,7 +492,8 @@ def print_job_details(jobs, verbose=False, is_real_time=False):
     # Sort jobs by start time (newest first), with jobs without times at the end
     sorted_jobs = sorted(
         unique_jobs.values(),
-        key=lambda x: parse_pbs_date(x.get('start_time')) or datetime.min,
+        key=lambda x: parse_db_date(x.get('start_time')) or datetime.min,
+#        key=lambda x: parse_pbs_date(x.get('start_time')) or datetime.min,
         reverse=True
     )
 
