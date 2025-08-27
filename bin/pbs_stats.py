@@ -504,14 +504,6 @@ def main():
     if args.watch and not args.real_time:
         args.real_time = True
 
-
-
-
-
-
-
-
-
     if args.watch:
         # Watch mode - continuously update
         try:
