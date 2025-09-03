@@ -57,6 +57,11 @@ def get_real_time_jobs(user=None, machine=None, verbose=False):
                 if machine not in exec_host:
                     continue
 
+            #Filter jobs not finalized
+            job_state = job_info.get('job_state', 'N/A')
+            if job_state == 'F':  # Skip finished jobs
+                continue
+
             # Extract job details
             job_user = job_info.get('Job_Owner', '').split('@')[0]
             job_state = job_info.get('job_state', 'N/A')
@@ -399,10 +404,10 @@ def print_job_details(jobs, verbose=False, is_real_time=False):
         print("\n{:<12} {:<15} {:<20} {:<10} {:<15} {:<10} {:<12} {:<12}".format(
             "Job ID", "User", "Machine", "Queue", "Job Name", "State", "CPU Used", "Walltime"))
         print("-" * 100)
-    else:
-        print("\n{:<20} {:<15} {:<10} {:<25}".format(
-            "User", "Machine", "Jobs", "Last Run"))
-        print("-" * 70)
+#    else:
+#        print("\n{:<20} {:<15} {:<10} {:<25}".format(
+#            "User", "Machine", "Jobs", "Last Run"))
+#        print("-" * 70)
 
     # Create a dictionary to store unique jobs based on job_id
     unique_jobs = {}
@@ -432,11 +437,6 @@ def print_job_details(jobs, verbose=False, is_real_time=False):
         reverse=True
     )
 
-    # Print header
-    print("\n{:<12} {:<15} {:<20} {:<10} {:<15} {:<10} {:<12} {:<12} {:<12}".format(
-        "Job ID", "User", "Machine", "Queue", "Job Name", "State", "Start Time", "CPU Used", "Walltime"))
-    print("-" * 120)
-    
     for job in sorted_jobs:
         # Safely extract and format all values
         job_id = str(job.get('job_id', 'N/A')).split('.')[0]
@@ -549,73 +549,94 @@ def main():
             verbose=args.verbose
         )
         
-        # Print report
-        print(f"\nPBS Job Statistics - {stats['period']}")
-        print(f"Total Jobs: {stats['total_jobs']}")
+        if args.real_time or args.jobs:
+            print(f"\nPBS Job Statistics - {stats['period']}")
+            print(f"Total Jobs: {stats['total_jobs']}")
         
-        if args.verbose and not stats['results']:
-            print("DEBUG: No results found with current filters", file=sys.stderr)
+            if args.verbose and not stats['results']:
+                print("DEBUG: No results found with current filters", file=sys.stderr)
         
-        if stats['results']:
-            print_job_details(stats['results'], args.verbose, stats['is_real_time'])
+            if stats['results']:
+                print_job_details(stats['results'], args.verbose, stats['is_real_time'])
+            else:
+                print("\nNo jobs found matching the specified criteria.")
         else:
-            print("\nNo jobs found matching the specified criteria.")
+            print(f"\nPBS Job Statistics - {stats['period']}")
+            print(f"Total Jobs: {stats['total_jobs']}")
+
+            if args.verbose:
+                print(f"DEBUG: Found {len(stats['results'])} matching jobs", file=sys.stderr)
+
+            if stats['results']:
+                print("\n{:<20} {:<15} {:<10} {:<15}".format(
+                    "User", "Machine", "Jobs", "Last Run"))
+                print("-" * 60)
+
+                for row in stats['results']:
+                    print("{:<20} {:<15} {:<10} {:<15}".format(
+                        row['user'],
+                        row['machine'],
+                        row['jobs'],
+                        row['last_run']))
+            else:
+                print("\nNo jobs found matching the specified criteria.")
 
 
-    if args.jobs:
-        jobs = get_job_details(
-            user=args.user,
-            machine=args.machine,
-            days=args.days,
-            verbose=args.verbose
-        )
-        # Print header for job listing
-        if args.user:
-            user_filter = f" for user '{args.user}'"
-        elif args.machine:
-            user_filter = f" on machine '{args.machine}'"
-        else:
-            user_filter = ""
-            
-        if args.days and args.days != 'all':
-            date_range = f" from last {args.days} days"
-        else:
-            date_range = ""
-            
-        print(f"\nPBS Job Details{user_filter}{date_range}")
-        print(f"Total Jobs: {len(jobs)}")
-        print(f"Unique Jobs Displayed: {len(set(j['job_id'] for j in jobs if 'job_id' in j))}")
-        
-        print_job_details(jobs, args.verbose)
-    else:
-        # Original summary functionality (unchanged)
-        stats = get_job_stats(
-            days=args.days if args.days else 'all',
-            user=args.user,
-            machine=args.machine,
-            verbose=args.verbose
-        )
 
-        # Print report
-        print(f"\nPBS Job Statistics - {stats['period']}")
-        print(f"Total Jobs: {stats['total_jobs']}")
-
-        if args.verbose:
-            print(f"DEBUG: Found {len(stats['results'])} matching jobs", file=sys.stderr)
-
-        if stats['results']:
-            print("\n{:<20} {:<15} {:<10} {:<15}".format(
-                "User", "Machine", "Jobs", "Last Run"))
-            print("-" * 60)
-
-            for row in stats['results']:
-                print("{:<20} {:<15} {:<10} {:<15}".format(
-                    row['user'],
-                    row['machine'],
-                    row['jobs'],
-                    row['last_run']))
-        else:
-            print("\nNo jobs found matching the specified criteria.")
+#    if args.jobs:
+#        jobs = get_job_details(
+#            user=args.user,
+#            machine=args.machine,
+#            days=args.days,
+#            verbose=args.verbose
+#        )
+#        # Print header for job listing
+#        if args.user:
+#            user_filter = f" for user '{args.user}'"
+#        elif args.machine:
+#            user_filter = f" on machine '{args.machine}'"
+#        else:
+#            user_filter = ""
+#            
+#        if args.days and args.days != 'all':
+#            date_range = f" from last {args.days} days"
+#        else:
+#            date_range = ""
+#            
+#        print(f"\nPBS Job Details{user_filter}{date_range}")
+#        print(f"Total Jobs: {len(jobs)}")
+#        print(f"Unique Jobs Displayed: {len(set(j['job_id'] for j in jobs if 'job_id' in j))}")
+#        
+#        print_job_details(jobs, args.verbose)
+#    else:
+#        # Original summary functionality (unchanged)
+#        stats = get_job_stats(
+#            days=args.days if args.days else 'all',
+#            user=args.user,
+#            machine=args.machine,
+#            verbose=args.verbose
+#        )
+#
+#        # Print report
+#        print(f"\nPBS Job Statistics - {stats['period']}")
+#        print(f"Total Jobs: {stats['total_jobs']}")
+#
+#        if args.verbose:
+#            print(f"DEBUG: Found {len(stats['results'])} matching jobs", file=sys.stderr)
+#
+#        if stats['results']:
+#            print("\n{:<20} {:<15} {:<10} {:<15}".format(
+#                "User", "Machine", "Jobs", "Last Run"))
+#            print("-" * 60)
+#
+#            for row in stats['results']:
+#                print("{:<20} {:<15} {:<10} {:<15}".format(
+#                    row['user'],
+#                    row['machine'],
+#                    row['jobs'],
+#                    row['last_run']))
+#        else:
+#            print("\nNo jobs found matching the specified criteria.")
 
 if __name__ == "__main__":
     main()
