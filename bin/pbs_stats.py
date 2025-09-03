@@ -224,17 +224,6 @@ def get_job_stats(days=None, user=None, machine=None, real_time=None, verbose=Fa
         GROUP BY user, machine
         ORDER BY job_count DESC
     """
-    #query = f"""
-    #    SELECT
-    #        job_id,
-    #        user,
-    #        machine,
-    #        start_time,
-    #        data_json
-    #    FROM jobs
-    #    WHERE {where_clause}
-    #    ORDER BY start_time DESC
-    #"""
     
     if verbose:
         print(f"DEBUG: Executing query: {query}", file=sys.stderr)
@@ -254,37 +243,6 @@ def get_job_stats(days=None, user=None, machine=None, real_time=None, verbose=Fa
                 'jobs': row['job_count'],
                 'last_run': format_pbs_date(row['start_time'])
             })
-
-#    for row in c.fetchall():
-#        job_data = json.loads(row['data_json'])
-#        resources_used = job_data.get('resources_used', {})
-
-        # Handle walltime conversion
-#        walltime_str = resources_used.get('walltime', 'N/A')
-#        walltime_seconds = parse_walltime(walltime_str) if walltime_str != 'N/A' else None
-
-#        results.append({
-#            'job_id': row['job_id'],
-#            'user': row['user'],
-#            'machine': row['machine'],
-#            'start_time': format_pbs_date(row['start_time']),
-#            'queue': job_data.get('queue', 'N/A'),
-#            'job_name': job_data.get('Job_Name', 'N/A'),
-#            'state': job_data.get('job_state', 'N/A'),
-#            'resources': {
-#                'cpus': job_data.get('Resource_List', {}).get('ncpus', 'N/A'),
-#                'mem': job_data.get('Resource_List', {}).get('mem', 'N/A'),
-#                'walltime': job_data.get('Resource_List', {}).get('walltime', 'N/A'),
-#            },
-#            'used': {
-#                'cpus': job_data.get('resources_used', {}).get('ncpus', 'N/A'),
-#                'mem': job_data.get('resources_used', {}).get('mem', 'N/A'),
-#                'walltime': format_duration(job_data.get('resources_used', {}).get('walltime')),
-#                'cpu_time': format_duration(job_data.get('resources_used', {}).get('cput')),
-#            },
-#            'exit_status': job_data.get('exit_status', 'N/A'),
-#            'submit_args': job_data.get('Submit_arguments', 'N/A'),
-#        })
 
     conn.close()
     return {
@@ -311,16 +269,6 @@ def get_job_details(user=None, machine=None, days=None, verbose=False):
         params.append(machine)
 
     where_clause = " AND ".join(conditions) if conditions else "1=1"
-
-    # Date filtering
-#    if days and days != 'all':
-#        try:
-#            days = int(days)
-#            cutoff_date = datetime.now() - timedelta(days=days)
-#            conditions.append("start_time >= ?")
-#            params.append(cutoff_date.strftime("%d-%m-%Y"))
-#        except ValueError:
-#            pass
 
     query = f"""
         SELECT
@@ -404,10 +352,6 @@ def print_job_details(jobs, verbose=False, is_real_time=False):
         print("\n{:<12} {:<15} {:<20} {:<10} {:<15} {:<10} {:<12} {:<12}".format(
             "Job ID", "User", "Machine", "Queue", "Job Name", "State", "CPU Used", "Walltime"))
         print("-" * 100)
-#    else:
-#        print("\n{:<20} {:<15} {:<10} {:<25}".format(
-#            "User", "Machine", "Jobs", "Last Run"))
-#        print("-" * 70)
 
     # Create a dictionary to store unique jobs based on job_id
     unique_jobs = {}
@@ -580,63 +524,6 @@ def main():
                         row['last_run']))
             else:
                 print("\nNo jobs found matching the specified criteria.")
-
-
-
-#    if args.jobs:
-#        jobs = get_job_details(
-#            user=args.user,
-#            machine=args.machine,
-#            days=args.days,
-#            verbose=args.verbose
-#        )
-#        # Print header for job listing
-#        if args.user:
-#            user_filter = f" for user '{args.user}'"
-#        elif args.machine:
-#            user_filter = f" on machine '{args.machine}'"
-#        else:
-#            user_filter = ""
-#            
-#        if args.days and args.days != 'all':
-#            date_range = f" from last {args.days} days"
-#        else:
-#            date_range = ""
-#            
-#        print(f"\nPBS Job Details{user_filter}{date_range}")
-#        print(f"Total Jobs: {len(jobs)}")
-#        print(f"Unique Jobs Displayed: {len(set(j['job_id'] for j in jobs if 'job_id' in j))}")
-#        
-#        print_job_details(jobs, args.verbose)
-#    else:
-#        # Original summary functionality (unchanged)
-#        stats = get_job_stats(
-#            days=args.days if args.days else 'all',
-#            user=args.user,
-#            machine=args.machine,
-#            verbose=args.verbose
-#        )
-#
-#        # Print report
-#        print(f"\nPBS Job Statistics - {stats['period']}")
-#        print(f"Total Jobs: {stats['total_jobs']}")
-#
-#        if args.verbose:
-#            print(f"DEBUG: Found {len(stats['results'])} matching jobs", file=sys.stderr)
-#
-#        if stats['results']:
-#            print("\n{:<20} {:<15} {:<10} {:<15}".format(
-#                "User", "Machine", "Jobs", "Last Run"))
-#            print("-" * 60)
-#
-#            for row in stats['results']:
-#                print("{:<20} {:<15} {:<10} {:<15}".format(
-#                    row['user'],
-#                    row['machine'],
-#                    row['jobs'],
-#                    row['last_run']))
-#        else:
-#            print("\nNo jobs found matching the specified criteria.")
 
 if __name__ == "__main__":
     main()
