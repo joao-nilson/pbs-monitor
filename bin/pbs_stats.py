@@ -563,21 +563,6 @@ def print_job_details(jobs, verbose=False, is_real_time=False):
                 print(f"  Submit Arguments: {job.get('submit_args')}")
             print("-" * 60)
 
-def should_store_job(job_data, conn, time_window_minutes=5):
-    """Check if we should store this job or if it's a recent duplicate"""
-    c = conn.cursor()
-
-    # Check if same job was stored recently
-    c.execute("""
-        SELECT COUNT(*)
-        FROM jobs
-        WHERE job_id = ? AND user = ? AND machine = ?
-        AND start_time >= datetime('now', ?)
-    """, (job_data['job_id'], job_data['user'], job_data['machine'], f'-{time_window_minutes} minutes'))
-
-    recent_count = c.fetchone()[0]
-    return recent_count == 0  # Only store if no recent duplicate
-
 def debug_database_content():
     """Debug function to check what's actually in the database"""
     conn = sqlite3.connect(DB_PATH)
