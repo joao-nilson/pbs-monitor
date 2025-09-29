@@ -32,6 +32,18 @@ def format_pbs_date(date_str):
     except Exception as e:
         return "N/A"
 
+def parse_input_date(date_str):
+    """Parse DD-MM-YYYY format into PBS date format"""
+    if not date_str:
+        return None
+    try:
+        # Parse DD-MM-YYYY format
+        dt = datetime.strptime(date_str, "%d-%m-%Y")
+        # Convert to PBS format: "Wed Sep 25 14:30:45 2024"
+        return dt.strftime("%a %b %d %H:%M:%S %Y")
+    except ValueError as e:
+        raise ValueError(f"Invalid date format: {date_str}. Use DD-MM-YYYY format") from e
+
 def get_real_time_jobs(user=None, machine=None, verbose=False):
     """Get real-time job information using qstat command"""
     try:
@@ -169,7 +181,25 @@ def format_duration(seconds):
     return ' '.join(parts)
 
 
-def get_job_stats(days=None, user=None, machine=None, real_time=None, verbose=False):
+def parse_pbs_date_to_datetime(date_str):
+    """Convert PBS date format to datetime object for proper comparison"""
+    if not date_str:
+        return None
+    try:
+        return datetime.strptime(date_str, "%a %b %d %H:%M:%S %Y")
+    except ValueError:
+        return None
+
+def parse_input_date_to_datetime(date_str):
+    """Parse DD-MM-YYYY format into datetime object"""
+    if not date_str:
+        return None
+    try:
+        return datetime.strptime(date_str, "%d-%m-%Y")
+    except ValueError as e:
+        raise ValueError(f"Invalid date format: {date_str}. Use DD-MM-YYYY format") from e
+
+def get_job_stats(days=None, date=None, start_date=None, end_date=None, user=None, machine=None, real_time=None, verbose=False):
     """Get detailed job information with all available fields"""
 
     if real_time:
@@ -187,19 +217,12 @@ def get_job_stats(days=None, user=None, machine=None, real_time=None, verbose=Fa
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
 
-    # Build WHERE clauses
+    # Build basic WHERE clauses (without date filtering)
     conditions = []
     params = []
+    date_range = "All history"
 
-    # Date filtering - disabled for now
-    if days and days != 'all':
-        try:
-            days_int = int(days)
-            if verbose:
-                print(f"DEBUG: Date filtering disabled - all data is from 2025", file=sys.stderr)
-        except ValueError:
-            pass
-
+    # Apply non-date filters first
     if user:
         conditions.append("user = ?")
         params.append(user)
@@ -213,57 +236,31 @@ def get_job_stats(days=None, user=None, machine=None, real_time=None, verbose=Fa
 
     where_clause = " AND ".join(conditions) if conditions else "1=1"
 
-    if days == 'all' or not days:
-        date_range = "All history"
-    else:
-        date_range = f"Last {days} days"
-
-    # Main query - FIXED: Add WHERE clause and handle parameters correctly
-    if conditions:
-        # If we have conditions, use parameterized query
-        query = f"""
-            SELECT
-                user,
-                COALESCE(machine, 'N/A') as machine,
-                MAX(start_time) as last_run,
-                COUNT(*) as job_count
-            FROM jobs
-            WHERE {where_clause}
-            GROUP BY user, COALESCE(machine, 'N/A')
-            ORDER BY job_count DESC
-        """
-    else:
-        # If no conditions, use simple query without parameters
-        query = """
-            SELECT
-                user,
-                COALESCE(machine, 'N/A') as machine,
-                MAX(start_time) as last_run,
-                COUNT(*) as job_count
-            FROM jobs
-            GROUP BY user, COALESCE(machine, 'N/A')
-            ORDER BY job_count DESC
-        """
-        params = []  # Clear params since we don't need them
+    # Get all jobs first, then filter by date in Python
+    base_query = f"""
+        SELECT
+            user,
+            COALESCE(machine, 'N/A') as machine,
+            start_time,
+            data_json
+        FROM jobs
+        WHERE {where_clause}
+    """
 
     if verbose:
-        print(f"DEBUG: Executing query: {query}", file=sys.stderr)
+        print(f"DEBUG: Base query: {base_query}", file=sys.stderr)
         print(f"DEBUG: With parameters: {params}", file=sys.stderr)
-        print(f"DEBUG: Date range: {date_range}", file=sys.stderr)
 
-    # Execute the query
+    # Execute the base query
     try:
         if params:
-            c.execute(query, params)
+            c.execute(base_query, params)
         else:
-            c.execute(query)
+            c.execute(base_query)
         
-        # DEBUG: Check what we actually got
-        rows = c.fetchall()
+        all_rows = c.fetchall()
         if verbose:
-            print(f"DEBUG: Raw SQL result - {len(rows)} rows returned", file=sys.stderr)
-            for i, row in enumerate(rows[:3]):  # Show first 3 rows
-                print(f"DEBUG: Row {i}: user='{row['user']}', machine='{row['machine']}', jobs={row['job_count']}", file=sys.stderr)
+            print(f"DEBUG: Found {len(all_rows)} total rows before date filtering", file=sys.stderr)
      
     except Exception as e:
         if verbose:
@@ -276,44 +273,344 @@ def get_job_stats(days=None, user=None, machine=None, real_time=None, verbose=Fa
             'is_real_time': False
         }
 
-    results = []
-
-    # Process the results
-    for row in rows:
-        results.append({
-            'user': row['user'],
-            'machine': row['machine'],
-            'jobs': row['job_count'],
-            'last_run': format_pbs_date(row['last_run'])
-        })
-
-    # Get total jobs count using the same WHERE clause
-    count_query = f"SELECT COUNT(*) as total FROM jobs WHERE {where_clause}"
-    try:
-        if params:
-            c.execute(count_query, params)
-        else:
-            c.execute(count_query)
-
-        total_jobs_result = c.fetchone()
-        total_jobs = total_jobs_result['total'] if total_jobs_result else 0
-
-    except Exception as e:
-        if verbose:
-            print(f"DEBUG: Count query failed: {e}", file=sys.stderr)
-        total_jobs = 0
-
     conn.close()
 
+    # Parse date range for filtering
+    start_dt = None
+    end_dt = None
+    
+    if date:
+        # Single date search
+        start_dt = datetime.strptime(date, "%d-%m-%Y")
+        end_dt = start_dt + timedelta(days=1)
+        date_range = f"Specific date: {date}"
+
+    elif start_date or end_date:
+        # Date range search
+        if start_date and end_date:
+            start_dt = datetime.strptime(start_date, "%d-%m-%Y")
+            end_dt = datetime.strptime(end_date, "%d-%m-%Y") + timedelta(days=1)
+            date_range = f"Date range: {start_date} to {end_date}"
+        elif start_date:
+            start_dt = datetime.strptime(start_date, "%d-%m-%Y")
+            date_range = f"From date: {start_date}"
+        elif end_date:
+            end_dt = datetime.strptime(end_date, "%d-%m-%Y") + timedelta(days=1)
+            date_range = f"Until date: {end_date}"
+
+    elif days and days != 'all':
+        # Existing relative days filter
+        try:
+            days_int = int(days)
+            start_dt = datetime.now() - timedelta(days=days_int)
+            date_range = f"Last {days} days"
+        except ValueError:
+            pass
+
+    # Filter jobs by date in Python
+    filtered_jobs = []
+    for row in all_rows:
+        start_time_str = row['start_time']
+        if not start_time_str:
+            continue
+            
+        job_dt = parse_pbs_date(start_time_str)
+        if not job_dt:
+            continue
+            
+        # Apply date filtering
+        include_job = True
+        if start_dt and job_dt < start_dt:
+            include_job = False
+        if end_dt and job_dt >= end_dt:
+            include_job = False
+            
+        if include_job:
+            filtered_jobs.append({
+                'user': row['user'],
+                'machine': row['machine'],
+                'start_time': start_time_str
+            })
+
     if verbose:
-        print(f"DEBUG: Found {total_jobs} total jobs, {len(results)} user-machine combinations", file=sys.stderr)
+        print(f"DEBUG: After date filtering: {len(filtered_jobs)} jobs", file=sys.stderr)
+
+    # Group and count jobs by user and machine
+    job_counts = {}
+    last_runs = {}
+    
+    for job in filtered_jobs:
+        key = (job['user'], job['machine'])
+        
+        # Count jobs
+        if key in job_counts:
+            job_counts[key] += 1
+        else:
+            job_counts[key] = 1
+            
+        # Track latest run
+        job_dt = parse_pbs_date(job['start_time'])
+        if key in last_runs:
+            if job_dt > last_runs[key]:
+                last_runs[key] = job_dt
+        else:
+            last_runs[key] = job_dt
+
+    # Convert to results format
+    results = []
+    for (user, machine), count in job_counts.items():
+        last_run_dt = last_runs.get((user, machine))
+        last_run_display = format_pbs_date(last_run_dt.strftime("%a %b %d %H:%M:%S %Y")) if last_run_dt else "N/A"
+        
+        results.append({
+            'user': user,
+            'machine': machine,
+            'jobs': count,
+            'last_run': last_run_display
+        })
+
+    # Sort by job count descending
+    results.sort(key=lambda x: x['jobs'], reverse=True)
+
+    if verbose:
+        print(f"DEBUG: Found {len(filtered_jobs)} total jobs, {len(results)} user-machine combinations", file=sys.stderr)
+        if results:
+            print(f"DEBUG: Sample results after filtering:", file=sys.stderr)
+            for i, result in enumerate(results[:3]):
+                print(f"DEBUG: Row {i}: user='{result['user']}', machine='{result['machine']}', jobs={result['jobs']}", file=sys.stderr)
 
     return {
         'period': date_range,
-        'total_jobs': total_jobs,
+        'total_jobs': len(filtered_jobs),
         'results': results,
         'is_real_time': False
     }
+
+#def get_job_stats(days=None, date=None, start_date=None, end_date=None, user=None, machine=None, real_time=None, verbose=False):
+#    """Get detailed job information with all available fields"""
+#
+#    if real_time:
+#        # Get real-time jobs
+#        real_time_jobs = get_real_time_jobs(user=user, machine=machine, verbose=verbose)
+#        return {
+#            'period': 'Real-time (current)',
+#            'total_jobs': len(real_time_jobs),
+#            'results': real_time_jobs,
+#            'is_real_time': True
+#        }
+#
+#    # Get historical jobs from database
+#    conn = sqlite3.connect(DB_PATH)
+#    conn.row_factory = sqlite3.Row
+#    c = conn.cursor()
+#
+#    # Build WHERE clauses
+#    conditions = []
+#    params = []
+#    date_range = "All history"
+#
+#    # Date filtering
+##    if date:
+##        # Single date search
+##        pbs_date_str = parse_input_date(date)
+##        conditions.append("start_time >= ? AND start_time < ?")
+##        params.extend([pbs_date_str,
+##                      (datetime.strptime(pbs_date_str, "%a %b %d %H:%M:%S %Y") +
+##                       timedelta(days=1)).strftime("%a %b %d %H:%M:%S %Y")])
+##        date_range = f"Specific date: {date}"
+##
+##    elif start_date or end_date:
+##        # Date range search
+##        if start_date and end_date:
+##            start_pbs = parse_input_date(start_date)
+##            end_pbs = (datetime.strptime(parse_input_date(end_date), "%a %b %d %H:%M:%S %Y") +
+##                      timedelta(days=1)).strftime("%a %b %d %H:%M:%S %Y")
+##            conditions.append("start_time >= ? AND start_time < ?")
+##            params.extend([start_pbs, end_pbs])
+##            date_range = f"Date range: {start_date} to {end_date}"
+##        elif start_date:
+##            start_pbs = parse_input_date(start_date)
+##            conditions.append("start_time >= ?")
+##            params.append(start_pbs)
+##            date_range = f"From date: {start_date}"
+##        elif end_date:
+##            end_pbs = (datetime.strptime(parse_input_date(end_date), "%a %b %d %H:%M:%S %Y") +
+##                      timedelta(days=1)).strftime("%a %b %d %H:%M:%S %Y")
+##            conditions.append("start_time < ?")
+##            params.append(end_pbs)
+##            date_range = f"Until date: {end_date}"
+##
+##    elif days and days != 'all':
+##        # Existing relative days filter (for backward compatibility)
+##        try:
+##            days_int = int(days)
+##            cutoff_date = datetime.now() - timedelta(days=days_int)
+##            cutoff_str = cutoff_date.strftime("%a %b %d %H:%M:%S %Y")
+##            conditions.append("start_time >= ?")
+##            params.append(cutoff_str)
+##            date_range = f"Last {days} days"
+##        except ValueError:
+##            pass
+#    
+#    # Date filtering with proper datetime handling
+#    if date:
+#        # Single date search
+#        start_dt = parse_input_date_to_datetime(date)
+#        end_dt = start_dt + timedelta(days=1)
+#        conditions.append("start_time >= ? AND start_time < ?")
+#        params.extend([start_dt.strftime("%a %b %d %H:%M:%S %Y"),
+#                      end_dt.strftime("%a %b %d %H:%M:%S %Y")])
+#        date_range = f"Specific date: {date}"
+#
+#    elif start_date or end_date:
+#        # Date range search
+#        if start_date and end_date:
+#            start_dt = parse_input_date_to_datetime(start_date)
+#            end_dt = parse_input_date_to_datetime(end_date) + timedelta(days=1)
+#            conditions.append("start_time >= ? AND start_time < ?")
+#            params.extend([start_dt.strftime("%a %b %d %H:%M:%S %Y"),
+#                          end_dt.strftime("%a %b %d %H:%M:%S %Y")])
+#            date_range = f"Date range: {start_date} to {end_date}"
+#        elif start_date:
+#            start_dt = parse_input_date_to_datetime(start_date)
+#            conditions.append("start_time >= ?")
+#            params.append(start_dt.strftime("%a %b %d %H:%M:%S %Y"))
+#            date_range = f"From date: {start_date}"
+#        elif end_date:
+#            end_dt = parse_input_date_to_datetime(end_date) + timedelta(days=1)
+#            conditions.append("start_time < ?")
+#            params.append(end_dt.strftime("%a %b %d %H:%M:%S %Y"))
+#            date_range = f"Until date: {end_date}"
+#
+#    elif days and days != 'all':
+#        # Existing relative days filter
+#        try:
+#            days_int = int(days)
+#            cutoff_date = datetime.now() - timedelta(days=days_int)
+#            conditions.append("start_time >= ?")
+#            params.append(cutoff_date.strftime("%a %b %d %H:%M:%S %Y"))
+#            date_range = f"Last {days} days"
+#        except ValueError:
+#            pass
+#
+#    if user:
+#        conditions.append("user = ?")
+#        params.append(user)
+#    if machine:
+#        conditions.append("machine = ?")
+#        params.append(machine)
+#
+#    # Only add user IS NOT NULL if we're not filtering by a specific user
+#    if not user:
+#        conditions.append("user IS NOT NULL")
+#
+#    where_clause = " AND ".join(conditions) if conditions else "1=1"
+#    
+#    # DEBUG: Check what's being filtered
+#    if verbose:
+#        print(f"DEBUG: Final conditions: {conditions}", file=sys.stderr)
+#        print(f"DEBUG: Final params: {params}", file=sys.stderr)
+#        print(f"DEBUG: Final date_range: {date_range}", file=sys.stderr)
+#
+#    # Main query    
+#    query = f"""
+#        SELECT
+#            user,
+#            COALESCE(machine, 'N/A') as machine,
+#            MAX(start_time) as last_run_in_range,
+#            COUNT(*) as job_count
+#        FROM jobs
+#        WHERE {where_clause}
+#        GROUP BY user, COALESCE(machine, 'N/A')
+#        ORDER BY job_count DESC
+#    """
+#
+#    if verbose:
+#        print(f"DEBUG: Executing query: {query}", file=sys.stderr)
+#        print(f"DEBUG: With parameters: {params}", file=sys.stderr)
+#        print(f"DEBUG: Date range: {date_range}", file=sys.stderr)
+#
+#    # Execute the query
+#    try:
+#        if params:
+#            c.execute(query, params)
+#        else:
+#            c.execute(query)
+#        
+#        rows = c.fetchall()
+#        # DEBUG: Check what we actually got
+#        if verbose:
+#            print(f"DEBUG: Raw SQL result - {len(rows)} rows returned", file=sys.stderr)
+#            for i, row in enumerate(rows[:5]):  # Show first 5 rows
+#                print(f"DEBUG: Row {i}: user='{row['user']}', machine='{row['machine']}', jobs={row['job_count']}", file=sys.stderr)
+#
+##            # Also check the actual date range in the database
+##            debug_query = f"SELECT MIN(start_time) as min_date, MAX(start_time) as max_date FROM jobs WHERE {where_clause}"
+##            if params:
+##                c.execute(debug_query, params)
+##            else:
+##                c.execute(debug_query)
+##            date_range_result = c.fetchone()
+##            print(f"DEBUG: Actual date range in filtered results: {date_range_result['min_date']} to {date_range_result['max_date']}", file=sys.stderr)
+#            # Debug: Check actual date range in results
+#            if rows:
+#                dates = [parse_pbs_date_to_datetime(row['last_run_in_range']) for row in rows if row['last_run_in_range']]
+#                valid_dates = [d for d in dates if d is not None]
+#                if valid_dates:
+#                    min_date = min(valid_dates)
+#                    max_date = max(valid_dates)
+#                    print(f"DEBUG: Actual date range in results: {min_date.strftime('%a %b %d %H:%M:%S %Y')} to {max_date.strftime('%a %b %d %H:%M:%S %Y')}", file=sys.stderr)
+#
+#
+#    except Exception as e:
+#        if verbose:
+#            print(f"DEBUG: Query failed: {e}", file=sys.stderr)
+#        conn.close()
+#        return {
+#            'period': date_range,
+#            'total_jobs': 0,
+#            'results': [],
+#            'is_real_time': False
+#        }
+#
+#    results = []
+#
+#    # Process the results
+#    for row in rows:
+#        results.append({
+#            'user': row['user'],
+#            'machine': row['machine'],
+#            'jobs': row['job_count'],
+#            'last_run': format_pbs_date(row['last_run_in_range'])
+#        })
+#
+#    # Get total jobs count using the same WHERE clause
+#    count_query = f"SELECT COUNT(*) as total FROM jobs WHERE {where_clause}"
+#    try:
+#        if params:
+#            c.execute(count_query, params)
+#        else:
+#            c.execute(count_query)
+#
+#        total_jobs_result = c.fetchone()
+#        total_jobs = total_jobs_result['total'] if total_jobs_result else 0
+#
+#    except Exception as e:
+#        if verbose:
+#            print(f"DEBUG: Count query failed: {e}", file=sys.stderr)
+#        total_jobs = 0
+#
+#    conn.close()
+#
+#    if verbose:
+#        print(f"DEBUG: Found {total_jobs} total jobs, {len(results)} user-machine combinations", file=sys.stderr)
+#
+#    return {
+#        'period': date_range,
+#        'total_jobs': total_jobs,
+#        'results': results,
+#        'is_real_time': False
+#    }
 
 def get_job_details(user=None, machine=None, days=None, verbose=False):
     """Get detailed job information with all available fields"""
@@ -491,6 +788,21 @@ def print_job_details(jobs, verbose=False, is_real_time=False):
                 print(f"  Submit Arguments: {job.get('submit_args')}")
             print("-" * 60)
 
+def should_store_job(job_data, conn, time_window_minutes=5):
+    """Check if we should store this job or if it's a recent duplicate"""
+    c = conn.cursor()
+
+    # Check if same job was stored recently
+    c.execute("""
+        SELECT COUNT(*)
+        FROM jobs
+        WHERE job_id = ? AND user = ? AND machine = ?
+        AND start_time >= datetime('now', ?)
+    """, (job_data['job_id'], job_data['user'], job_data['machine'], f'-{time_window_minutes} minutes'))
+
+    recent_count = c.fetchone()[0]
+    return recent_count == 0  # Only store if no recent duplicate
+
 def debug_database_content():
     """Debug function to check what's actually in the database"""
     conn = sqlite3.connect(DB_PATH)
@@ -572,26 +884,56 @@ def debug_query_execution():
     
     conn.close()
 
+def debug_database_dates():
+    """Debug function to check what dates are actually in the database"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+
+    print("=== DATABASE DATE DEBUG ===")
+
+    # Check overall date range
+    c.execute("SELECT MIN(start_time) as min_date, MAX(start_time) as max_date FROM jobs")
+    overall_range = c.fetchone()
+    print(f"Overall date range in database: {overall_range['min_date']} to {overall_range['max_date']}")
+
+    # Check specific date range we're querying for
+    test_start = "Mon Jul 28 00:00:00 2025"
+    test_end = "Thu Jul 31 00:00:00 2025"
+    c.execute("SELECT COUNT(*) as count FROM jobs WHERE start_time >= ? AND start_time < ?",
+              [test_start, test_end])
+    count_result = c.fetchone()
+    print(f"Jobs between {test_start} and {test_end}: {count_result['count']}")
+
+    # Check a few sample jobs in that range
+    c.execute("SELECT user, machine, start_time FROM jobs WHERE start_time >= ? AND start_time < ? LIMIT 5",
+              [test_start, test_end])
+    sample_jobs = c.fetchall()
+    print("Sample jobs in date range:")
+    for job in sample_jobs:
+        print(f"  {job['user']} on {job['machine']} at {job['start_time']}")
+
+    conn.close()
+
+
 def main():
     parser = argparse.ArgumentParser(description='PBS Job Statistics')
-    parser.add_argument('--days', '-d', nargs='?', const=7, default=None,
-                       help='Number of days to report (default: last week), use --days all or -d all for entire history, --days 30 for last 30 days, etc.')
+    parser.add_argument('--days', '-d', nargs='?', const=7, default=None,help='Number of days to report (default: last week), use --days all or -d all for entire history, --days 30 for last 30 days, etc.')
+    parser.add_argument('--date', help='Search for a specific date (format: DD-MM-YYYY)')
+    parser.add_argument('--start-date', help='Start date for range search (format: DD-MM-YYYY)')
+    parser.add_argument('--end-date', help='End date for range search (format: DD-MM-YYYY)')
     parser.add_argument('--user', help='Filter by specific user')
     parser.add_argument('--machine', help='Filter by specific compute node')
-    parser.add_argument('--real-time', '-r', action='store_true',
-                       help='Show real-time job information')
-    parser.add_argument('--jobs', action='store_true',
-                       help='Show detailed job information')
-    parser.add_argument('--verbose', action='store_true',
-                       help='Show additional debug information and details')
-    parser.add_argument('--watch', '-w', action='store_true',
-                       help='Watch mode - continuously update real-time information')
-    parser.add_argument('--interval', '-n', type=int, default=5,
-                       help='Update interval in seconds for watch mode (default: 5)')
+    parser.add_argument('--real-time', '-r', action='store_true', help='Show real-time job information')
+    parser.add_argument('--jobs', action='store_true', help='Show detailed job information')
+    parser.add_argument('--verbose', action='store_true', help='Show additional debug information and details')
+    parser.add_argument('--watch', '-w', action='store_true', help='Watch mode - continuously update real-time information')
+    parser.add_argument('--interval', '-n', type=int, default=5, help='Update interval in seconds for watch mode (default: 5)')
     args = parser.parse_args()
 
 #    debug_database_content()
 #    debug_query_execution()
+#    debug_database_dates()
 
     if args.verbose:
         print(f"DEBUG: Starting with arguments: {vars(args)}", file=sys.stderr)
@@ -637,7 +979,10 @@ def main():
                   f"real_time={args.real_time}", file=sys.stderr)
         
         stats = get_job_stats(
-            days=args.days, 
+            days=args.days,
+            date=args.date,
+            start_date=args.start_date,
+            end_date=args.end_date,
             user=args.user, 
             machine=args.machine, 
             real_time=args.real_time,
