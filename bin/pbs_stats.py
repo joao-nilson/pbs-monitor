@@ -775,15 +775,9 @@ def main():
     parser.add_argument('--interval', '-n', type=int, default=5, help='Update interval in seconds for watch mode (default: 5)')
     args = parser.parse_args()
 
-#    debug_database_content()
-#    debug_query_execution()
-#    debug_database_dates()
-
     if args.verbose:
         print(f"DEBUG: Starting with arguments: {vars(args)}", file=sys.stderr)
     
-    debug_job_counts()
-
     if args.watch and not args.real_time:
         args.real_time = True
 
