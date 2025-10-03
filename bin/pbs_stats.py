@@ -309,21 +309,45 @@ def get_job_stats(days=None, date=None, start_date=None, end_date=None, user=Non
 
     # Filter jobs by date in Python
     filtered_jobs = []
+    unparseable_dates = 0
+    missing_dates = 0
+
     for row in all_rows:
         start_time_str = row['start_time']
+
+        # Handle jobs with missing start_time
         if not start_time_str:
+            missing_dates += 1
+            # Always include jobs with missing start_time when no date filtering is requested
+            if not any([date, start_date, end_date, days]):
+                filtered_jobs.append({
+                    'user': row['user'],
+                    'machine': row['machine'],
+                    'start_time': start_time_str
+                })
             continue
             
         job_dt = parse_pbs_date(start_time_str)
+        
+        #Handle jobs with unparseable dates
         if not job_dt:
+            unparseable_dates += 1
+            if not any([date, start_date, end_date, days]):
+                # Include jobs with unparseable dates when no date filtering is requested
+                filtered_jobs.append({
+                    'user': row['user'],
+                    'machine': row['machine'],
+                    'start_time': start_time_str
+                })
             continue
             
         # Apply date filtering
         include_job = True
-        if start_dt and job_dt < start_dt:
-            include_job = False
-        if end_dt and job_dt >= end_dt:
-            include_job = False
+        if any([date, start_date, end_date, days]):  # Only filter if date parameters exist
+            if start_dt and job_dt < start_dt:
+                include_job = False
+            if end_dt and job_dt >= end_dt:
+                include_job = False
             
         if include_job:
             filtered_jobs.append({
@@ -334,6 +358,12 @@ def get_job_stats(days=None, date=None, start_date=None, end_date=None, user=Non
 
     if verbose:
         print(f"DEBUG: After date filtering: {len(filtered_jobs)} jobs", file=sys.stderr)
+        print(f"DEBUG: Jobs with missing start_time: {missing_dates}", file=sys.stderr)
+        print(f"DEBUG: Jobs with unparseable dates: {unparseable_dates}", file=sys.stderr)
+        if any([date, start_date, end_date, days]):
+            print(f"DEBUG: Date filtering was APPLIED", file=sys.stderr)
+        else:
+            print(f"DEBUG: Date filtering was SKIPPED (no date parameters)", file=sys.stderr)
 
     # Group and count jobs by user and machine
     job_counts = {}
@@ -349,10 +379,18 @@ def get_job_stats(days=None, date=None, start_date=None, end_date=None, user=Non
             job_counts[key] = 1
             
         # Track latest run
-        job_dt = parse_pbs_date(job['start_time'])
+        job_dt = parse_pbs_date(job['start_time']) if job['start_time'] else None
+
         if key in last_runs:
-            if job_dt > last_runs[key]:
+            current_last = last_runs[key]
+            # Only update if we have a valid date and it's later than current
+            if job_dt and current_last:
+                if job_dt > current_last:
+                    last_runs[key] = job_dt
+            elif job_dt and not current_last:
+                # If we have a date but current is None, use the date
                 last_runs[key] = job_dt
+            # If both are None, keep current (None)
         else:
             last_runs[key] = job_dt
 
@@ -360,7 +398,11 @@ def get_job_stats(days=None, date=None, start_date=None, end_date=None, user=Non
     results = []
     for (user, machine), count in job_counts.items():
         last_run_dt = last_runs.get((user, machine))
-        last_run_display = format_pbs_date(last_run_dt.strftime("%a %b %d %H:%M:%S %Y")) if last_run_dt else "N/A"
+        
+        if last_run_dt:
+            last_run_display = format_pbs_date(last_run_dt.strftime("%a %b %d %H:%M:%S %Y"))
+        else:
+            last_run_display = "N/A"
         
         results.append({
             'user': user,
@@ -644,6 +686,48 @@ def debug_query_execution():
     
     conn.close()
 
+def debug_job_counts():
+    """Debug function to check job counts and understand the discrepancy"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+
+    print("=== JOB COUNT DEBUGGING ===")
+
+    # Total jobs in database
+    c.execute("SELECT COUNT(*) as total FROM jobs")
+    total_db = c.fetchone()['total']
+    print(f"Total jobs in database: {total_db}")
+
+    # Jobs with NULL users
+    c.execute("SELECT COUNT(*) as count FROM jobs WHERE user IS NULL")
+    null_users = c.fetchone()['count']
+    print(f"Jobs with NULL user: {null_users}")
+
+    # Jobs with empty user strings
+    c.execute("SELECT COUNT(*) as count FROM jobs WHERE user = ''")
+    empty_users = c.fetchone()['count']
+    print(f"Jobs with empty user: {empty_users}")
+
+    # Jobs with valid users
+    c.execute("SELECT COUNT(*) as count FROM jobs WHERE user IS NOT NULL AND user != ''")
+    valid_users = c.fetchone()['count']
+    print(f"Jobs with valid users: {valid_users}")
+
+    # Check if there are other filters being applied
+    c.execute("SELECT DISTINCT user FROM jobs WHERE user IS NULL OR user = '' LIMIT 10")
+    problematic_users = c.fetchall()
+    print(f"Sample problematic users: {[row['user'] for row in problematic_users]}")
+
+    conn.close()
+
+    # Calculate expected count based on your script's logic
+    expected_count = valid_users
+    print(f"\nExpected count in script: {expected_count}")
+    print(f"Actual count in script: 14570")
+    print(f"Difference: {total_db - 14570} jobs missing")
+
+
 def debug_database_dates():
     """Debug function to check what dates are actually in the database"""
     conn = sqlite3.connect(DB_PATH)
@@ -698,6 +782,8 @@ def main():
     if args.verbose:
         print(f"DEBUG: Starting with arguments: {vars(args)}", file=sys.stderr)
     
+    debug_job_counts()
+
     if args.watch and not args.real_time:
         args.real_time = True
 
